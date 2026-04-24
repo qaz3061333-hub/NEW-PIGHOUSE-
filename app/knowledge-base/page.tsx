@@ -4,7 +4,13 @@ import { FormEvent, useEffect, useMemo, useState } from "react";
 import { PageShell } from "@/components/page-shell";
 import { SimpleTable } from "@/components/simple-table";
 import { kbArticles as mockKbArticles } from "@/lib/mockData";
-import { isSupabaseConfigured, supabaseEnvWarning, supabaseRequest } from "@/lib/supabaseClient";
+import {
+  fetchKnowledgeArticles,
+  insertKnowledgeArticle,
+  isSupabaseConfigured,
+  supabaseEnvWarning,
+  updateKnowledgeArticle,
+} from "@/lib/supabaseClient";
 import { KbArticle } from "@/lib/types";
 
 const initialForm = { title: "", category: "", content: "" };
@@ -20,10 +26,7 @@ export default function KnowledgeBasePage() {
       if (!isSupabaseConfigured) return;
 
       try {
-        const data = await supabaseRequest<KbArticle[]>({
-          table: "knowledge_articles",
-          query: "select=*&order=updated_at.desc",
-        });
+        const data = await fetchKnowledgeArticles<KbArticle[]>();
         setArticles(data);
         setNotice("");
       } catch (error) {
@@ -65,21 +68,10 @@ export default function KnowledgeBasePage() {
 
     try {
       if (!editingId) {
-        const inserted = await supabaseRequest<KbArticle[]>({
-          table: "knowledge_articles",
-          method: "POST",
-          body: payload,
-          prefer: "return=representation",
-        });
+        const inserted = await insertKnowledgeArticle<KbArticle[]>(payload);
         setArticles((prev) => [...inserted, ...prev]);
       } else {
-        const updated = await supabaseRequest<KbArticle[]>({
-          table: "knowledge_articles",
-          method: "PATCH",
-          query: `id=eq.${encodeURIComponent(editingId)}`,
-          body: payload,
-          prefer: "return=representation",
-        });
+        const updated = await updateKnowledgeArticle<KbArticle[]>(editingId, payload);
         setArticles((prev) => prev.map((item) => (item.id === editingId ? updated[0] : item)));
       }
 
@@ -101,13 +93,7 @@ export default function KnowledgeBasePage() {
     }
 
     try {
-      const updated = await supabaseRequest<KbArticle[]>({
-        table: "knowledge_articles",
-        method: "PATCH",
-        query: `id=eq.${encodeURIComponent(article.id)}`,
-        body: { is_active: next, updated_at: new Date().toISOString() },
-        prefer: "return=representation",
-      });
+      const updated = await updateKnowledgeArticle<KbArticle[]>(article.id, { is_active: next, updated_at: new Date().toISOString() });
       setArticles((prev) => prev.map((item) => (item.id === article.id ? updated[0] : item)));
     } catch (error) {
       setNotice(`更新狀態失敗：${(error as Error).message}`);
