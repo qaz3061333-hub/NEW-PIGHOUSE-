@@ -1,20 +1,79 @@
+"use client";
+
+import { useEffect, useState } from "react";
 import { PageShell } from "@/components/page-shell";
 import { SimpleTable } from "@/components/simple-table";
-import { appointmentRequests } from "@/lib/mockData";
+import { appointmentRequests as mockAppointmentRequests } from "@/lib/mockData";
+import { isSupabaseConfigured, supabaseEnvWarning, supabaseRequest } from "@/lib/supabaseClient";
+import { AppointmentRequest, AppointmentStatus } from "@/lib/types";
+
+const statusOptions: AppointmentStatus[] = ["pending", "confirmed", "proposed_new_time", "rejected"];
 
 export default function AppointmentRequestsPage() {
+  const [requests, setRequests] = useState<AppointmentRequest[]>(mockAppointmentRequests);
+  const [notice, setNotice] = useState<string>(isSupabaseConfigured ? "" : supabaseEnvWarning);
+
+  useEffect(() => {
+    async function load() {
+      if (!isSupabaseConfigured) return;
+      try {
+        const data = await supabaseRequest<AppointmentRequest[]>({
+          table: "appointment_requests",
+          query: "select=*&order=requested_at.desc",
+        });
+        setRequests(data);
+      } catch (error) {
+        setNotice(`Supabase 讀取失敗，已使用 mock data。${(error as Error).message}`);
+      }
+    }
+
+    load();
+  }, []);
+
+  async function updateStatus(id: string, status: AppointmentStatus) {
+    if (!isSupabaseConfigured) {
+      setRequests((prev) => prev.map((item) => (item.id === id ? { ...item, status } : item)));
+      setNotice(supabaseEnvWarning);
+      return;
+    }
+
+    try {
+      const updated = await supabaseRequest<AppointmentRequest[]>({
+        table: "appointment_requests",
+        method: "PATCH",
+        query: `id=eq.${encodeURIComponent(id)}`,
+        body: { status, updated_at: new Date().toISOString() },
+        prefer: "return=representation",
+      });
+      setRequests((prev) => prev.map((item) => (item.id === id ? updated[0] : item)));
+    } catch (error) {
+      setNotice(`狀態更新失敗：${(error as Error).message}`);
+    }
+  }
+
   return (
-    <PageShell title="Appointment Requests 預約申請" description="顯示來自 LINE 的預約申請（目前為 mock data）。">
+    <PageShell title="Appointment Requests 預約申請" description="預約申請清單，可調整處理狀態。">
+      {notice ? <p className="mb-3 rounded-md bg-amber-50 px-3 py-2 text-sm text-amber-800">{notice}</p> : null}
       <SimpleTable headers={["申請編號", "寵物", "服務", "飼主", "申請時間", "狀態"]}>
-        {appointmentRequests.map((request) => (
+        {requests.map((request) => (
           <tr key={request.id}>
             <td className="px-4 py-3">{request.id}</td>
-            <td className="px-4 py-3">{request.petName}</td>
+            <td className="px-4 py-3">{request.pet_name}</td>
             <td className="px-4 py-3">{request.service}</td>
-            <td className="px-4 py-3">{request.ownerName}</td>
-            <td className="px-4 py-3">{request.requestedAt}</td>
+            <td className="px-4 py-3">{request.owner_name}</td>
+            <td className="px-4 py-3">{request.requested_at}</td>
             <td className="px-4 py-3">
-              <span className="rounded-full bg-emerald-50 px-2 py-1 text-xs text-emerald-700">{request.status}</span>
+              <select
+                className="rounded border border-slate-300 bg-white px-2 py-1 text-xs"
+                value={request.status}
+                onChange={(event) => updateStatus(request.id, event.target.value as AppointmentStatus)}
+              >
+                {statusOptions.map((status) => (
+                  <option key={status} value={status}>
+                    {status}
+                  </option>
+                ))}
+              </select>
             </td>
           </tr>
         ))}
