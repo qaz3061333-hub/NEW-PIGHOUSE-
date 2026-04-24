@@ -1,14 +1,15 @@
 # Pet Care CS Backend MVP
 
-Next.js + TypeScript + Tailwind CSS 建立的客服後台 MVP（目前全部使用 mock data）。
+Next.js + TypeScript + Tailwind CSS 建立的客服後台 MVP。
+目前支援 Supabase（環境變數未設定時會自動 fallback 到 mock data，不會整站壞掉）。
 
 ## 已完成頁面
 
 - Dashboard
-- Knowledge Base 知識庫管理
-- Appointment Requests 預約申請
-- Abnormal Alerts 異常提醒
-- Manual Reply Tasks 需人工回覆
+- Knowledge Base 知識庫管理（新增 / 編輯 / 啟用停用）
+- Appointment Requests 預約申請（更新狀態）
+- Abnormal Alerts 異常提醒（標記已處理）
+- Manual Reply Tasks 需人工回覆（標記已回覆）
 - Conversation Logs 對話紀錄
 
 ## 啟動方式
@@ -20,19 +21,17 @@ npm run dev
 
 開啟 <http://localhost:3000>
 
-## 後續接 Supabase（建議步驟）
+## Supabase 設定
 
-1. 建立 Supabase 專案與資料表：
-   - `knowledge_articles`
-   - `appointment_requests`
-   - `abnormal_alerts`
-   - `manual_reply_tasks`
-   - `conversation_logs`
-2. 安裝 `@supabase/supabase-js`，建立 `lib/supabase.ts`。
-3. 以 Server Components / Route Handlers 將 `lib/mockData.ts` 替換為 Supabase 查詢。
-4. 新增 `.env.local`：
+1. 在 Supabase SQL Editor 執行 `supabase/schema.sql`。
+2. 建立 `.env.local`（可參考 `.env.example`）：
    - `NEXT_PUBLIC_SUPABASE_URL`
    - `NEXT_PUBLIC_SUPABASE_ANON_KEY`
-5. 在各頁面補上 CRUD（新增、更新狀態、刪除）流程。
+3. 在 Vercel Project Settings → Environment Variables 設定同樣兩個變數。
 
-> 注意：目前專案沒有使用任何真實 API key。
+> 請勿在前端使用 `service_role` key。
+
+## 說明
+
+- 若未設定 Supabase 環境變數，前端會顯示提示並使用 `lib/mockData.ts`。
+- 目前未串接 LINE，也未串接 OpenAI。
