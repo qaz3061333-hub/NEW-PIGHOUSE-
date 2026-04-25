@@ -46,10 +46,15 @@ export type AbnormalAlert = {
 export type ManualReplyTask = {
   id: string;
   customer: string;
+  source_channel?: string | null;
+  customer_line_user_id?: string | null;
   topic: string;
+  last_message?: string | null;
+  reply_note?: string | null;
   waiting_minutes: number;
   priority: "normal" | "urgent";
   is_replied: boolean;
+  replied_at?: string | null;
 };
 
 export type ConversationLog = {
