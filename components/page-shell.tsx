@@ -1,4 +1,7 @@
+"use client";
+
 import Link from "next/link";
+import { usePathname } from "next/navigation";
 import { ReactNode } from "react";
 
 const navItems = [
@@ -11,6 +14,13 @@ const navItems = [
 ];
 
 export function PageShell({ title, description, children }: { title: string; description: string; children: ReactNode }) {
+  const pathname = usePathname();
+
+  const isItemActive = (href: string) => {
+    if (href === "/") return pathname === "/";
+    return pathname === href || pathname.startsWith(`${href}/`);
+  };
+
   return (
     <div className="min-h-screen">
       <header className="border-b bg-white">
@@ -24,7 +34,14 @@ export function PageShell({ title, description, children }: { title: string; des
         <aside className="rounded-xl border bg-white p-4">
           <nav className="space-y-2">
             {navItems.map((item) => (
-              <Link key={item.href} href={item.href} className="block rounded-md px-3 py-2 text-sm text-slate-700 hover:bg-slate-100">
+              <Link
+                key={item.href}
+                href={item.href}
+                className={`block rounded-md px-3 py-2 text-sm transition-colors ${
+                  isItemActive(item.href) ? "bg-brand/10 font-medium text-brand" : "text-slate-700 hover:bg-slate-100"
+                }`}
+                aria-current={isItemActive(item.href) ? "page" : undefined}
+              >
                 {item.label}
               </Link>
             ))}
