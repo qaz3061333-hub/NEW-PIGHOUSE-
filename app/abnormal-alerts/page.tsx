@@ -20,6 +20,7 @@ export default function AbnormalAlertsPage() {
           query: "select=*&order=triggered_at.desc",
         });
         setAlerts(data);
+        setNotice("");
       } catch (error) {
         setNotice(`Supabase 讀取失敗，已使用 mock data。${(error as Error).message}`);
       }
@@ -43,7 +44,12 @@ export default function AbnormalAlertsPage() {
         body: { is_resolved: true, resolved_at: new Date().toISOString() },
         prefer: "return=representation",
       });
+      if (!updated[0]) {
+        setNotice("更新失敗：找不到對應資料列。");
+        return;
+      }
       setAlerts((prev) => prev.map((item) => (item.id === id ? updated[0] : item)));
+      setNotice("");
     } catch (error) {
       setNotice(`更新失敗：${(error as Error).message}`);
     }
