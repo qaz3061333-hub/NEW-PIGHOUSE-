@@ -22,6 +22,7 @@ export default function AppointmentRequestsPage() {
           query: "select=*&order=requested_at.desc",
         });
         setRequests(data);
+        setNotice("");
       } catch (error) {
         setNotice(`Supabase 讀取失敗，已使用 mock data。${(error as Error).message}`);
       }
@@ -45,7 +46,12 @@ export default function AppointmentRequestsPage() {
         body: { status, updated_at: new Date().toISOString() },
         prefer: "return=representation",
       });
+      if (!updated[0]) {
+        setNotice("狀態更新失敗：找不到對應資料列。");
+        return;
+      }
       setRequests((prev) => prev.map((item) => (item.id === id ? updated[0] : item)));
+      setNotice("");
     } catch (error) {
       setNotice(`狀態更新失敗：${(error as Error).message}`);
     }
