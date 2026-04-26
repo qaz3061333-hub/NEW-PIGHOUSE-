@@ -1,40 +1,29 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { FormEvent, useEffect, useMemo, useState } from "react";
 import { PageShell } from "@/components/page-shell";
 import { SimpleTable } from "@/components/simple-table";
 import { conversationLogs as mockConversationLogs } from "@/lib/mockData";
+import { EMPTY_ANALYZE_RESULT, SandboxAnalyzeResult } from "@/lib/sandbox";
 import { isSupabaseConfigured, supabaseEnvWarning, supabaseRequest } from "@/lib/supabaseClient";
 import { ConversationLog } from "@/lib/types";
 
-type SandboxScenario = "confirm" | "reschedule" | "reject";
+type ChatMessage = {
+  id: string;
+  role: "customer" | "assistant";
+  content: string;
+};
+
+const confidencePercent = (value: number) => `${Math.round(Math.max(0, Math.min(1, value)) * 100)}%`;
 
 export default function ConversationLogsPage() {
   const [logs, setLogs] = useState<ConversationLog[]>(mockConversationLogs);
   const [notice, setNotice] = useState<string>(isSupabaseConfigured ? "" : supabaseEnvWarning);
-  const [scenario, setScenario] = useState<SandboxScenario>("confirm");
-  const [sandboxReply, setSandboxReply] = useState("");
-  const [confirmForm, setConfirmForm] = useState({
-    customerName: "",
-    appointmentDate: "",
-    appointmentTime: "",
-    serviceItem: "",
-    note: "",
-  });
-  const [rescheduleForm, setRescheduleForm] = useState({
-    customerName: "",
-    originalDate: "",
-    originalTime: "",
-    serviceItem: "",
-    alternativeTimes: "",
-    note: "",
-  });
-  const [rejectForm, setRejectForm] = useState({
-    customerName: "",
-    requestDetail: "",
-    rejectReason: "",
-    note: "",
-  });
+  const [inputMessage, setInputMessage] = useState("");
+  const [error, setError] = useState("");
+  const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [analysisResult, setAnalysisResult] = useState<SandboxAnalyzeResult | null>(null);
+  const [chat, setChat] = useState<ChatMessage[]>([]);
 
   useEffect(() => {
     async function load() {
@@ -45,49 +34,73 @@ export default function ConversationLogsPage() {
           query: "select=id,channel,content,created_at,customers(name)&order=created_at.desc",
         });
 
-        const mapped: ConversationLog[] = data.map((row: ConversationLog & { content?: string; created_at?: string; customers?: { name?: string } }) => ({
-          id: row.id,
-          customer: row.customers?.name ?? "未知客戶",
-          channel: row.channel,
-          last_message: row.content ?? row.last_message,
-          updated_at: row.created_at ?? row.updated_at,
-        }));
+        const mapped: ConversationLog[] = data.map(
+          (row: ConversationLog & { content?: string; created_at?: string; customers?: { name?: string } }) => ({
+            id: row.id,
+            customer: row.customers?.name ?? "未知客戶",
+            channel: row.channel,
+            last_message: row.content ?? row.last_message,
+            updated_at: row.created_at ?? row.updated_at,
+          }),
+        );
 
         setLogs(mapped);
-      } catch (error) {
-        setNotice(`Supabase 讀取失敗，已使用 mock data。${(error as Error).message}`);
+      } catch (loadError) {
+        setNotice(`Supabase 讀取失敗，已使用 mock data。${(loadError as Error).message}`);
       }
     }
 
     load();
   }, []);
 
-  function generateSandboxReply() {
-    if (scenario === "confirm") {
-      const noteText = confirmForm.note.trim() ? ` 備註：${confirmForm.note.trim()}。` : "";
-      setSandboxReply(
-        `您好 ${confirmForm.customerName || "貴賓"}，已為您確認預約：${confirmForm.appointmentDate || "（日期待確認）"} ${confirmForm.appointmentTime || "（時間待確認）"}，服務項目為${confirmForm.serviceItem || "（服務待確認）"}。期待您的到來！${noteText}`,
-      );
+  const extractedRows = useMemo(() => {
+    const data = analysisResult?.extracted ?? EMPTY_ANALYZE_RESULT.extracted;
+    return [
+      ["customer_name", data.customer_name],
+      ["service_item", data.service_item],
+      ["preferred_date", data.preferred_date],
+      ["preferred_time", data.preferred_time],
+      ["issue", data.issue],
+      ["urgency", data.urgency],
+    ] as Array<[string, string]>;
+  }, [analysisResult]);
+
+  async function submitSandboxMessage(event: FormEvent) {
+    event.preventDefault();
+    const message = inputMessage.trim();
+    if (!message) {
+      setError("請先輸入模擬客人訊息。");
       return;
     }
 
-    if (scenario === "reschedule") {
-      const alternatives = rescheduleForm.alternativeTimes
-        .split(/[\n,，]/)
-        .map((item) => item.trim())
-        .filter(Boolean);
-      const alternativeText = alternatives.length ? alternatives.join("、") : "（尚未提供可改約時段）";
-      const noteText = rescheduleForm.note.trim() ? ` 備註：${rescheduleForm.note.trim()}。` : "";
-      setSandboxReply(
-        `您好 ${rescheduleForm.customerName || "貴賓"}，您原本想預約的 ${rescheduleForm.originalDate || "（日期待確認）"} ${rescheduleForm.originalTime || "（時間待確認）"}（${rescheduleForm.serviceItem || "服務待確認"}）目前已滿。以下時間目前可以安排：${alternativeText}。請問哪個時間方便呢？${noteText}`,
-      );
-      return;
-    }
+    setIsAnalyzing(true);
+    setError("");
+    setAnalysisResult(null);
 
-    const noteText = rejectForm.note.trim() ? ` 備註：${rejectForm.note.trim()}。` : "";
-    setSandboxReply(
-      `您好 ${rejectForm.customerName || "貴賓"}，很抱歉，因為${rejectForm.rejectReason || "目前條件限制"}，本次「${rejectForm.requestDetail || "預約需求"}」暫時無法安排。謝謝您的理解。${noteText}`,
-    );
+    try {
+      const response = await fetch("/api/sandbox/analyze-message", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ message }),
+      });
+
+      const payload = (await response.json()) as { error?: string; result?: SandboxAnalyzeResult };
+      if (!response.ok || !payload.result) {
+        setError(payload.error || "沙盒分析失敗，請稍後再試。");
+        return;
+      }
+
+      setAnalysisResult(payload.result);
+      setChat([
+        { id: `${Date.now()}-customer`, role: "customer", content: message },
+        { id: `${Date.now()}-assistant`, role: "assistant", content: payload.result.customer_reply },
+      ]);
+      setInputMessage("");
+    } catch (requestError) {
+      setError(`沙盒分析失敗：${(requestError as Error).message}`);
+    } finally {
+      setIsAnalyzing(false);
+    }
   }
 
   return (
@@ -106,180 +119,75 @@ export default function ConversationLogsPage() {
       </SimpleTable>
 
       <section className="mt-6 rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
-        <h2 className="text-lg font-semibold text-slate-900">AI / LINE 回覆沙盒模擬</h2>
+        <h2 className="text-lg font-semibold text-slate-900">LINE 沙盒對話模擬器（Gemini 沙盒判斷 v1）</h2>
         <p className="mt-2 rounded-md bg-amber-50 px-3 py-2 text-sm text-amber-800">
-          這是沙盒模擬，不會真的送出 LINE 訊息。
+          這是沙盒模擬，不會真的送出 LINE 訊息，也不會寫入正式資料。
         </p>
 
-        <div className="mt-4">
-          <label className="mb-1 block text-sm font-medium text-slate-700" htmlFor="sandbox-scenario">
-            模擬情境
+        <form className="mt-4 space-y-3" onSubmit={submitSandboxMessage}>
+          <label className="block text-sm text-slate-700" htmlFor="sandbox-message">
+            模擬客人訊息
+            <textarea
+              id="sandbox-message"
+              className="mt-1 w-full rounded border border-slate-300 px-3 py-2 text-sm"
+              rows={4}
+              placeholder="例如：我想改成下週三晚上七點洗加剪，可以嗎？"
+              value={inputMessage}
+              onChange={(event) => setInputMessage(event.target.value)}
+            />
           </label>
-          <select
-            id="sandbox-scenario"
-            className="w-full rounded border border-slate-300 bg-white px-3 py-2 text-sm"
-            value={scenario}
-            onChange={(event) => {
-              setScenario(event.target.value as SandboxScenario);
-              setSandboxReply("");
-            }}
+          <button
+            type="submit"
+            disabled={isAnalyzing}
+            className="rounded bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-700 disabled:cursor-not-allowed disabled:bg-slate-400"
           >
-            <option value="confirm">確認預約</option>
-            <option value="reschedule">需要改時間</option>
-            <option value="reject">拒絕預約</option>
-          </select>
+            {isAnalyzing ? "分析中..." : "送出模擬訊息"}
+          </button>
+        </form>
+
+        {error ? <p className="mt-3 rounded-md bg-rose-50 px-3 py-2 text-sm text-rose-700">{error}</p> : null}
+
+        <div className="mt-5 rounded-lg border border-slate-200 bg-slate-50 p-3">
+          <h3 className="text-sm font-semibold text-slate-800">沙盒聊天視窗</h3>
+          <div className="mt-3 space-y-2">
+            {chat.length === 0 ? <p className="text-sm text-slate-500">尚未送出模擬訊息。</p> : null}
+            {chat.map((message) => (
+              <div key={message.id} className={`flex ${message.role === "customer" ? "justify-end" : "justify-start"}`}>
+                <div
+                  className={`max-w-[85%] rounded-2xl px-3 py-2 text-sm ${
+                    message.role === "customer" ? "bg-emerald-500 text-white" : "bg-white text-slate-800"
+                  }`}
+                >
+                  {message.content}
+                </div>
+              </div>
+            ))}
+          </div>
         </div>
 
-        {scenario === "confirm" ? (
-          <div className="mt-4 grid gap-3 md:grid-cols-2">
-            <label className="text-sm text-slate-700">
-              客人名稱
-              <input
-                className="mt-1 w-full rounded border border-slate-300 px-3 py-2 text-sm"
-                value={confirmForm.customerName}
-                onChange={(event) => setConfirmForm((prev) => ({ ...prev, customerName: event.target.value }))}
-              />
-            </label>
-            <label className="text-sm text-slate-700">
-              預約日期
-              <input
-                className="mt-1 w-full rounded border border-slate-300 px-3 py-2 text-sm"
-                value={confirmForm.appointmentDate}
-                onChange={(event) => setConfirmForm((prev) => ({ ...prev, appointmentDate: event.target.value }))}
-              />
-            </label>
-            <label className="text-sm text-slate-700">
-              預約時間
-              <input
-                className="mt-1 w-full rounded border border-slate-300 px-3 py-2 text-sm"
-                value={confirmForm.appointmentTime}
-                onChange={(event) => setConfirmForm((prev) => ({ ...prev, appointmentTime: event.target.value }))}
-              />
-            </label>
-            <label className="text-sm text-slate-700">
-              服務項目
-              <input
-                className="mt-1 w-full rounded border border-slate-300 px-3 py-2 text-sm"
-                value={confirmForm.serviceItem}
-                onChange={(event) => setConfirmForm((prev) => ({ ...prev, serviceItem: event.target.value }))}
-              />
-            </label>
-            <label className="text-sm text-slate-700 md:col-span-2">
-              備註（可選）
-              <textarea
-                className="mt-1 w-full rounded border border-slate-300 px-3 py-2 text-sm"
-                rows={2}
-                value={confirmForm.note}
-                onChange={(event) => setConfirmForm((prev) => ({ ...prev, note: event.target.value }))}
-              />
-            </label>
-          </div>
-        ) : null}
+        {analysisResult ? (
+          <div className="mt-5 rounded-lg border border-indigo-200 bg-indigo-50 p-4 text-sm text-slate-800">
+            <h3 className="font-semibold text-indigo-900">系統判斷結果</h3>
+            <ul className="mt-2 space-y-1">
+              <li>判斷類型：{analysisResult.intent}</li>
+              <li>信心程度：{confidencePercent(analysisResult.confidence)}</li>
+              <li>建議歸類功能：{analysisResult.target_module}</li>
+              <li>摘要：{analysisResult.summary}</li>
+              <li>是否寫入正式資料：否</li>
+              <li>是否送出 LINE：否</li>
+            </ul>
 
-        {scenario === "reschedule" ? (
-          <div className="mt-4 grid gap-3 md:grid-cols-2">
-            <label className="text-sm text-slate-700">
-              客人名稱
-              <input
-                className="mt-1 w-full rounded border border-slate-300 px-3 py-2 text-sm"
-                value={rescheduleForm.customerName}
-                onChange={(event) => setRescheduleForm((prev) => ({ ...prev, customerName: event.target.value }))}
-              />
-            </label>
-            <label className="text-sm text-slate-700">
-              原本想預約的日期
-              <input
-                className="mt-1 w-full rounded border border-slate-300 px-3 py-2 text-sm"
-                value={rescheduleForm.originalDate}
-                onChange={(event) => setRescheduleForm((prev) => ({ ...prev, originalDate: event.target.value }))}
-              />
-            </label>
-            <label className="text-sm text-slate-700">
-              原本想預約的時間
-              <input
-                className="mt-1 w-full rounded border border-slate-300 px-3 py-2 text-sm"
-                value={rescheduleForm.originalTime}
-                onChange={(event) => setRescheduleForm((prev) => ({ ...prev, originalTime: event.target.value }))}
-              />
-            </label>
-            <label className="text-sm text-slate-700">
-              服務項目
-              <input
-                className="mt-1 w-full rounded border border-slate-300 px-3 py-2 text-sm"
-                value={rescheduleForm.serviceItem}
-                onChange={(event) => setRescheduleForm((prev) => ({ ...prev, serviceItem: event.target.value }))}
-              />
-            </label>
-            <label className="text-sm text-slate-700 md:col-span-2">
-              可提供的新時間（可輸入一個或多個，逗號或換行分隔）
-              <textarea
-                className="mt-1 w-full rounded border border-slate-300 px-3 py-2 text-sm"
-                rows={3}
-                value={rescheduleForm.alternativeTimes}
-                onChange={(event) => setRescheduleForm((prev) => ({ ...prev, alternativeTimes: event.target.value }))}
-              />
-            </label>
-            <label className="text-sm text-slate-700 md:col-span-2">
-              備註（可選）
-              <textarea
-                className="mt-1 w-full rounded border border-slate-300 px-3 py-2 text-sm"
-                rows={2}
-                value={rescheduleForm.note}
-                onChange={(event) => setRescheduleForm((prev) => ({ ...prev, note: event.target.value }))}
-              />
-            </label>
-          </div>
-        ) : null}
-
-        {scenario === "reject" ? (
-          <div className="mt-4 grid gap-3 md:grid-cols-2">
-            <label className="text-sm text-slate-700">
-              客人名稱
-              <input
-                className="mt-1 w-full rounded border border-slate-300 px-3 py-2 text-sm"
-                value={rejectForm.customerName}
-                onChange={(event) => setRejectForm((prev) => ({ ...prev, customerName: event.target.value }))}
-              />
-            </label>
-            <label className="text-sm text-slate-700">
-              預約需求
-              <input
-                className="mt-1 w-full rounded border border-slate-300 px-3 py-2 text-sm"
-                value={rejectForm.requestDetail}
-                onChange={(event) => setRejectForm((prev) => ({ ...prev, requestDetail: event.target.value }))}
-              />
-            </label>
-            <label className="text-sm text-slate-700 md:col-span-2">
-              拒絕原因
-              <input
-                className="mt-1 w-full rounded border border-slate-300 px-3 py-2 text-sm"
-                value={rejectForm.rejectReason}
-                onChange={(event) => setRejectForm((prev) => ({ ...prev, rejectReason: event.target.value }))}
-              />
-            </label>
-            <label className="text-sm text-slate-700 md:col-span-2">
-              備註（可選）
-              <textarea
-                className="mt-1 w-full rounded border border-slate-300 px-3 py-2 text-sm"
-                rows={2}
-                value={rejectForm.note}
-                onChange={(event) => setRejectForm((prev) => ({ ...prev, note: event.target.value }))}
-              />
-            </label>
-          </div>
-        ) : null}
-
-        <button
-          type="button"
-          className="mt-4 rounded bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-700"
-          onClick={generateSandboxReply}
-        >
-          產生模擬回覆
-        </button>
-
-        {sandboxReply ? (
-          <div className="mt-4 rounded-md border border-emerald-200 bg-emerald-50 px-3 py-3 text-sm text-emerald-900">
-            {sandboxReply}
+            <div className="mt-3 rounded border border-indigo-100 bg-white p-3">
+              <h4 className="font-medium text-slate-900">擷取欄位</h4>
+              <ul className="mt-2 grid gap-1 md:grid-cols-2">
+                {extractedRows.map(([key, value]) => (
+                  <li key={key}>
+                    <span className="font-medium">{key}：</span>
+                    <span>{value || "-"}</span>
+                  </li>
+                ))}
+              </ul>
+            </div>
           </div>
         ) : null}
       </section>
