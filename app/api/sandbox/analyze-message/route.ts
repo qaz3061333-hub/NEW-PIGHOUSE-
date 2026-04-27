@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { EMPTY_ANALYZE_RESULT, SANDBOX_INTENTS, SandboxAnalyzeResult, SandboxIntent } from "@/lib/sandbox";
 
-const GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent";
+const GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/models";
 
 function parseNumber(value: unknown): number {
   const n = typeof value === "number" ? value : Number(value);
@@ -63,9 +63,12 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "Gemini API Key 尚未設定" }, { status: 500 });
     }
 
+    const model = process.env.GEMINI_MODEL || "gemini-2.0-flash";
+    const geminiUrl = `${GEMINI_BASE_URL}/${model}:generateContent`;
+
     const prompt = `你是客服分流判斷器。\n請根據使用者提供的客人訊息，判斷客服意圖。\n\n判斷規則：\n- appointment_request：客人想預約、改約、詢問可預約時間、指定服務時間\n- abnormal_alert：客訴、不滿、受傷、投訴、緊急、負面情緒\n- knowledge_question：詢問價格、營業時間、服務內容、注意事項\n- manual_reply_task：需要人員判斷或 AI 不確定\n- unknown：無法判斷\n\n你必須只輸出 JSON，禁止輸出任何 JSON 以外文字。\nJSON schema：\n{\n  "intent": "appointment_request | abnormal_alert | knowledge_question | manual_reply_task | unknown",\n  "confidence": 0.0,\n  "customer_reply": "給客人的繁體中文回覆",\n  "target_module": "Appointment Requests | Abnormal Alerts | Knowledge Base | Manual Reply Tasks | Conversation Logs",\n  "summary": "繁體中文摘要",\n  "extracted": {\n    "customer_name": "",\n    "service_item": "",\n    "preferred_date": "",\n    "preferred_time": "",\n    "issue": "",\n    "urgency": ""\n  }\n}\n\n客人訊息：${message.trim()}`;
 
-    const response = await fetch(`${GEMINI_URL}?key=${apiKey}`, {
+    const response = await fetch(`${geminiUrl}?key=${apiKey}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -84,21 +87,21 @@ export async function POST(request: Request) {
 
     if (!response.ok) {
       const body = await response.text();
-      return NextResponse.json({ error: `Gemini 呼叫失敗：${body || response.statusText}` }, { status: 502 });
+      return NextResponse.json({ error: `Gemini 呼叫失敗（model: ${model}）：${body || response.statusText}` }, { status: 502 });
     }
 
     const raw = await response.json();
     const text = extractGeminiText(raw);
 
     if (!text) {
-      return NextResponse.json({ error: "Gemini 未回傳可解析內容" }, { status: 502 });
+      return NextResponse.json({ error: `Gemini 未回傳可解析內容（model: ${model}）` }, { status: 502 });
     }
 
     let parsed: unknown;
     try {
       parsed = JSON.parse(text);
     } catch {
-      return NextResponse.json({ error: "Gemini 回傳格式不是有效 JSON" }, { status: 502 });
+      return NextResponse.json({ error: `Gemini 回傳格式不是有效 JSON（model: ${model}）` }, { status: 502 });
     }
 
     return NextResponse.json({ result: normalizeResult(parsed) });
