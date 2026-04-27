@@ -22,8 +22,10 @@ export default function ConversationLogsPage() {
   const [inputMessage, setInputMessage] = useState("");
   const [error, setError] = useState("");
   const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [isCreatingSandboxRequest, setIsCreatingSandboxRequest] = useState(false);
   const [analysisResult, setAnalysisResult] = useState<SandboxAnalyzeResult | null>(null);
   const [chat, setChat] = useState<ChatMessage[]>([]);
+  const [sandboxRequestMessage, setSandboxRequestMessage] = useState("");
 
   useEffect(() => {
     async function load() {
@@ -65,6 +67,23 @@ export default function ConversationLogsPage() {
     ] as Array<[string, string]>;
   }, [analysisResult]);
 
+  function resolveSandboxRequestedAt(preferredDate: string, preferredTime: string) {
+    const dateValue = preferredDate.trim();
+    const timeValue = preferredTime.trim();
+
+    if (dateValue) {
+      if (timeValue) {
+        const directParse = new Date(`${dateValue}T${timeValue}`);
+        if (!Number.isNaN(directParse.getTime())) return directParse.toISOString();
+      }
+
+      const dateOnlyParse = new Date(dateValue);
+      if (!Number.isNaN(dateOnlyParse.getTime())) return dateOnlyParse.toISOString();
+    }
+
+    return new Date().toISOString();
+  }
+
   async function submitSandboxMessage(event: FormEvent) {
     event.preventDefault();
     const message = inputMessage.trim();
@@ -76,6 +95,7 @@ export default function ConversationLogsPage() {
     setIsAnalyzing(true);
     setError("");
     setAnalysisResult(null);
+    setSandboxRequestMessage("");
 
     try {
       const response = await fetch("/api/sandbox/analyze-message", {
@@ -103,6 +123,43 @@ export default function ConversationLogsPage() {
     }
   }
 
+
+  async function createSandboxAppointmentRequest() {
+    if (!analysisResult || analysisResult.intent !== "appointment_request") return;
+
+    setIsCreatingSandboxRequest(true);
+    setSandboxRequestMessage("");
+
+    const extracted = analysisResult.extracted;
+    const payload = {
+      owner_name: extracted.customer_name?.trim() || "Sandbox Customer",
+      service: extracted.service_item?.trim() || "Sandbox Service",
+      pet_name: "Sandbox Pet",
+      requested_at: resolveSandboxRequestedAt(extracted.preferred_date, extracted.preferred_time),
+      status: "pending" as const,
+      is_sandbox: true,
+    };
+
+    if (!isSupabaseConfigured) {
+      setSandboxRequestMessage(`建立失敗：${supabaseEnvWarning}`);
+      setIsCreatingSandboxRequest(false);
+      return;
+    }
+
+    try {
+      await supabaseRequest({
+        table: "appointment_requests",
+        method: "POST",
+        body: payload,
+      });
+      setSandboxRequestMessage("已建立沙盒預約申請。請到 Appointment Requests 查看。");
+    } catch (createError) {
+      setSandboxRequestMessage(`建立失敗：${(createError as Error).message}`);
+    } finally {
+      setIsCreatingSandboxRequest(false);
+    }
+  }
+
   return (
     <PageShell title="Conversation Logs 對話紀錄" description="客服與顧客歷史對話摘要。">
       {notice ? <p className="mb-3 rounded-md bg-amber-50 px-3 py-2 text-sm text-amber-800">{notice}</p> : null}
@@ -121,7 +178,7 @@ export default function ConversationLogsPage() {
       <section className="mt-6 rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
         <h2 className="text-lg font-semibold text-slate-900">LINE 沙盒對話模擬器（Gemini 沙盒判斷 v1）</h2>
         <p className="mt-2 rounded-md bg-amber-50 px-3 py-2 text-sm text-amber-800">
-          這是沙盒模擬，不會真的送出 LINE 訊息，也不會寫入正式資料。
+          這是沙盒模擬，不會真的送出 LINE 訊息，也不會通知客人；若建立預約僅會寫入 Sandbox 資料。
         </p>
 
         <form className="mt-4 space-y-3" onSubmit={submitSandboxMessage}>
@@ -188,6 +245,20 @@ export default function ConversationLogsPage() {
                 ))}
               </ul>
             </div>
+
+            {analysisResult.intent === "appointment_request" ? (
+              <div className="mt-3">
+                <button
+                  type="button"
+                  onClick={createSandboxAppointmentRequest}
+                  disabled={isCreatingSandboxRequest}
+                  className="rounded bg-indigo-700 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-600 disabled:cursor-not-allowed disabled:bg-indigo-300"
+                >
+                  {isCreatingSandboxRequest ? "建立中..." : "建立沙盒預約申請"}
+                </button>
+                {sandboxRequestMessage ? <p className="mt-2 text-sm text-slate-700">{sandboxRequestMessage}</p> : null}
+              </div>
+            ) : null}
           </div>
         ) : null}
       </section>
