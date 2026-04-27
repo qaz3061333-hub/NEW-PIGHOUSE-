@@ -15,6 +15,12 @@ type ChatMessage = {
 };
 
 const confidencePercent = (value: number) => `${Math.round(Math.max(0, Math.min(1, value)) * 100)}%`;
+const DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
+const TIME_PATTERN = /^([01]\d|2[0-3]):[0-5]\d$/;
+
+function isStructuredDateTime(preferredDate: string, preferredTime: string) {
+  return DATE_PATTERN.test(preferredDate.trim()) && TIME_PATTERN.test(preferredTime.trim());
+}
 
 export default function ConversationLogsPage() {
   const [logs, setLogs] = useState<ConversationLog[]>(mockConversationLogs);
@@ -64,24 +70,24 @@ export default function ConversationLogsPage() {
       ["preferred_time", data.preferred_time],
       ["issue", data.issue],
       ["urgency", data.urgency],
+      ["time_status", data.time_status],
+      ["needs_clarification", data.needs_clarification ? "true" : "false"],
     ] as Array<[string, string]>;
   }, [analysisResult]);
 
+  const canCreateSandboxRequest = useMemo(() => {
+    if (!analysisResult || analysisResult.intent !== "appointment_request") return false;
+    const extracted = analysisResult.extracted;
+    if (extracted.needs_clarification || extracted.time_status !== "valid") return false;
+    return isStructuredDateTime(extracted.preferred_date, extracted.preferred_time);
+  }, [analysisResult]);
+
   function resolveSandboxRequestedAt(preferredDate: string, preferredTime: string) {
-    const dateValue = preferredDate.trim();
-    const timeValue = preferredTime.trim();
+    if (!isStructuredDateTime(preferredDate, preferredTime)) return null;
 
-    if (dateValue) {
-      if (timeValue) {
-        const directParse = new Date(`${dateValue}T${timeValue}`);
-        if (!Number.isNaN(directParse.getTime())) return directParse.toISOString();
-      }
-
-      const dateOnlyParse = new Date(dateValue);
-      if (!Number.isNaN(dateOnlyParse.getTime())) return dateOnlyParse.toISOString();
-    }
-
-    return new Date().toISOString();
+    const isoCandidate = new Date(`${preferredDate.trim()}T${preferredTime.trim()}:00+08:00`);
+    if (Number.isNaN(isoCandidate.getTime())) return null;
+    return isoCandidate.toISOString();
   }
 
   async function submitSandboxMessage(event: FormEvent) {
@@ -123,19 +129,29 @@ export default function ConversationLogsPage() {
     }
   }
 
-
   async function createSandboxAppointmentRequest() {
     if (!analysisResult || analysisResult.intent !== "appointment_request") return;
+    if (!canCreateSandboxRequest) {
+      setSandboxRequestMessage("時間需要重新確認，暫不建立沙盒預約。請先修正日期與時間。");
+      return;
+    }
 
     setIsCreatingSandboxRequest(true);
     setSandboxRequestMessage("");
 
     const extracted = analysisResult.extracted;
+    const requestedAt = resolveSandboxRequestedAt(extracted.preferred_date, extracted.preferred_time);
+    if (!requestedAt) {
+      setSandboxRequestMessage("建立失敗：無法解析為有效預約時間，請先修正日期與時間。");
+      setIsCreatingSandboxRequest(false);
+      return;
+    }
+
     const payload = {
       owner_name: extracted.customer_name?.trim() || "Sandbox Customer",
       service: extracted.service_item?.trim() || "Sandbox Service",
       pet_name: "Sandbox Pet",
-      requested_at: resolveSandboxRequestedAt(extracted.preferred_date, extracted.preferred_time),
+      requested_at: requestedAt,
       status: "pending" as const,
       is_sandbox: true,
     };
@@ -248,10 +264,13 @@ export default function ConversationLogsPage() {
 
             {analysisResult.intent === "appointment_request" ? (
               <div className="mt-3">
+                {(!canCreateSandboxRequest || analysisResult.extracted.time_status === "past") && (
+                  <p className="mb-2 rounded bg-amber-100 px-3 py-2 text-amber-900">時間需要重新確認，暫不建立沙盒預約。</p>
+                )}
                 <button
                   type="button"
                   onClick={createSandboxAppointmentRequest}
-                  disabled={isCreatingSandboxRequest}
+                  disabled={isCreatingSandboxRequest || !canCreateSandboxRequest}
                   className="rounded bg-indigo-700 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-600 disabled:cursor-not-allowed disabled:bg-indigo-300"
                 >
                   {isCreatingSandboxRequest ? "建立中..." : "建立沙盒預約申請"}

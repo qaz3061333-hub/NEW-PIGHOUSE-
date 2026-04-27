@@ -8,6 +8,8 @@ export const SANDBOX_INTENTS = [
 
 export type SandboxIntent = (typeof SANDBOX_INTENTS)[number];
 
+export type SandboxTimeStatus = "valid" | "past" | "unclear";
+
 export type SandboxAnalyzeResult = {
   intent: SandboxIntent;
   confidence: number;
@@ -21,6 +23,8 @@ export type SandboxAnalyzeResult = {
     preferred_time: string;
     issue: string;
     urgency: string;
+    time_status: SandboxTimeStatus;
+    needs_clarification: boolean;
   };
 };
 
@@ -37,5 +41,7 @@ export const EMPTY_ANALYZE_RESULT: SandboxAnalyzeResult = {
     preferred_time: "",
     issue: "",
     urgency: "",
+    time_status: "unclear",
+    needs_clarification: true,
   },
 };
