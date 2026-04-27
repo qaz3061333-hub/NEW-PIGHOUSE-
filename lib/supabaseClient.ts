@@ -8,7 +8,7 @@ export const isSupabaseConfigured = Boolean(supabaseUrl && supabaseAnonKey);
 export const supabaseEnvWarning =
   "Supabase 尚未設定環境變數，現在使用 mock data。請設定 NEXT_PUBLIC_SUPABASE_URL 與 NEXT_PUBLIC_SUPABASE_ANON_KEY。";
 
-type SupabaseMethod = "GET" | "POST" | "PATCH";
+type SupabaseMethod = "GET" | "POST" | "PATCH" | "DELETE";
 
 type RequestOptions = {
   table: string;
@@ -67,6 +67,20 @@ export async function supabaseRequest<T>({ table, method = "GET", query = "", bo
 
   if (method === "PATCH") {
     let builder = supabase.from(table).update(body);
+
+    params.forEach((value, key) => {
+      if (value.startsWith("eq.")) {
+        builder = builder.eq(key, decodeURIComponent(value.slice(3)));
+      }
+    });
+
+    const { data, error } = await builder.select();
+    if (error) throw new Error(error.message);
+    return (data ?? []) as T;
+  }
+
+  if (method === "DELETE") {
+    let builder = supabase.from(table).delete();
 
     params.forEach((value, key) => {
       if (value.startsWith("eq.")) {
