@@ -9,6 +9,12 @@ import {
 
 const GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/models";
 const TAIWAN_TIMEZONE = "Asia/Taipei";
+const MAX_HISTORY_LENGTH = 10;
+
+type SandboxHistoryMessage = {
+  role: "customer" | "assistant";
+  content: string;
+};
 
 function parseNumber(value: unknown): number {
   const n = typeof value === "number" ? value : Number(value);
@@ -88,9 +94,24 @@ function getTaiwanNowContext() {
   };
 }
 
+function normalizeHistory(value: unknown): SandboxHistoryMessage[] {
+  if (!Array.isArray(value)) return [];
+
+  return value
+    .map((item) => {
+      if (typeof item !== "object" || item === null) return null;
+      const source = item as Record<string, unknown>;
+      if ((source.role !== "customer" && source.role !== "assistant") || typeof source.content !== "string") return null;
+      const content = source.content.trim();
+      if (!content) return null;
+      return { role: source.role, content };
+    })
+    .filter((item): item is SandboxHistoryMessage => item !== null);
+}
+
 export async function POST(request: Request) {
   try {
-    const { message } = (await request.json()) as { message?: string };
+    const { message, history } = (await request.json()) as { message?: string; history?: unknown };
 
     if (!message || !message.trim()) {
       return NextResponse.json({ error: "請輸入要分析的客人訊息。" }, { status: 400 });
@@ -104,6 +125,12 @@ export async function POST(request: Request) {
     const model = process.env.GEMINI_MODEL || "gemini-2.0-flash";
     const geminiUrl = `${GEMINI_BASE_URL}/${model}:generateContent`;
     const taiwanNow = getTaiwanNowContext();
+    const normalizedHistory = normalizeHistory(history);
+    const recentHistory = normalizedHistory.slice(-MAX_HISTORY_LENGTH);
+    const historyContext =
+      recentHistory.length > 0
+        ? recentHistory.map((item, index) => `${index + 1}. ${item.role === "customer" ? "客人" : "助理"}：${item.content}`).join("\n")
+        : "（無）";
 
     const prompt = `你是客服分流判斷器。
 請根據使用者提供的客人訊息，判斷客服意圖，並抽取可用欄位。
@@ -134,6 +161,9 @@ export async function POST(request: Request) {
   5) summary 要明確註記「時間已過」
 - 若時間資訊不足或不確定，time_status="unclear" 且 needs_clarification=true。
 - 僅在日期時間可直接用於預約時，time_status="valid" 且 needs_clarification=false。
+
+最近沙盒對話紀錄（最多 ${MAX_HISTORY_LENGTH} 則，越後面越新）：
+${historyContext}
 
 你必須只輸出 JSON，禁止輸出任何 JSON 以外文字。
 JSON schema：

@@ -14,6 +14,8 @@ type ChatMessage = {
   content: string;
 };
 
+type SandboxHistoryMessage = Pick<ChatMessage, "role" | "content">;
+
 const confidencePercent = (value: number) => `${Math.round(Math.max(0, Math.min(1, value)) * 100)}%`;
 const DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 const TIME_PATTERN = /^([01]\d|2[0-3]):[0-5]\d$/;
@@ -103,23 +105,32 @@ export default function ConversationLogsPage() {
     setAnalysisResult(null);
     setSandboxRequestMessage("");
 
+    const customerMessage: ChatMessage = {
+      id: `${Date.now()}-customer`,
+      role: "customer",
+      content: message,
+    };
+    const nextHistory: SandboxHistoryMessage[] = [...chat, customerMessage].map(({ role, content }) => ({ role, content }));
+    setChat((previous) => [...previous, customerMessage]);
+
     try {
       const response = await fetch("/api/sandbox/analyze-message", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message }),
+        body: JSON.stringify({ message, history: nextHistory }),
       });
 
       const payload = (await response.json()) as { error?: string; result?: SandboxAnalyzeResult };
-      if (!response.ok || !payload.result) {
+      const result = payload.result;
+      if (!response.ok || !result) {
         setError(payload.error || "沙盒分析失敗，請稍後再試。");
         return;
       }
 
-      setAnalysisResult(payload.result);
-      setChat([
-        { id: `${Date.now()}-customer`, role: "customer", content: message },
-        { id: `${Date.now()}-assistant`, role: "assistant", content: payload.result.customer_reply },
+      setAnalysisResult(result);
+      setChat((previous) => [
+        ...previous,
+        { id: `${Date.now()}-assistant`, role: "assistant", content: result.customer_reply },
       ]);
       setInputMessage("");
     } catch (requestError) {
@@ -127,6 +138,13 @@ export default function ConversationLogsPage() {
     } finally {
       setIsAnalyzing(false);
     }
+  }
+
+  function clearSandboxConversation() {
+    setChat([]);
+    setAnalysisResult(null);
+    setSandboxRequestMessage("");
+    setError("");
   }
 
   async function createSandboxAppointmentRequest() {
@@ -209,13 +227,23 @@ export default function ConversationLogsPage() {
               onChange={(event) => setInputMessage(event.target.value)}
             />
           </label>
-          <button
-            type="submit"
-            disabled={isAnalyzing}
-            className="rounded bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-700 disabled:cursor-not-allowed disabled:bg-slate-400"
-          >
-            {isAnalyzing ? "分析中..." : "送出模擬訊息"}
-          </button>
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="submit"
+              disabled={isAnalyzing}
+              className="rounded bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-700 disabled:cursor-not-allowed disabled:bg-slate-400"
+            >
+              {isAnalyzing ? "分析中..." : "送出模擬訊息"}
+            </button>
+            <button
+              type="button"
+              onClick={clearSandboxConversation}
+              disabled={isAnalyzing || isCreatingSandboxRequest}
+              className="rounded border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              清除沙盒對話
+            </button>
+          </div>
         </form>
 
         {error ? <p className="mt-3 rounded-md bg-rose-50 px-3 py-2 text-sm text-rose-700">{error}</p> : null}
