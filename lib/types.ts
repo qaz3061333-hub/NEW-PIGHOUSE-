@@ -32,6 +32,7 @@ export type AppointmentRequest = {
   owner_name: string;
   requested_at: string;
   status: AppointmentStatus;
+  is_sandbox?: boolean;
 };
 
 export type AbnormalAlert = {
