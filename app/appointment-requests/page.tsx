@@ -9,6 +9,34 @@ import { AppointmentRequest, AppointmentStatus } from "@/lib/types";
 
 const statusOptions: AppointmentStatus[] = ["pending", "confirmed", "proposed_new_time", "rejected"];
 
+function splitRequestedAt(requestedAt: string): { dateText: string; timeText: string } {
+  const trimmed = requestedAt.trim();
+  if (!trimmed) {
+    return { dateText: "未提供日期", timeText: "未提供時間" };
+  }
+
+  const match = trimmed.match(/^(\d{4}-\d{2}-\d{2})[ T](\d{2}:\d{2})/);
+  if (match) {
+    return { dateText: match[1], timeText: match[2] };
+  }
+
+  const [datePart, timePart] = trimmed.split(/\s+/, 2);
+  return {
+    dateText: datePart || "未提供日期",
+    timeText: timePart || "未提供時間",
+  };
+}
+
+function buildSandboxConfirmedMessage(request: AppointmentRequest): string {
+  const { dateText, timeText } = splitRequestedAt(request.requested_at);
+  const ownerName = request.owner_name?.trim();
+  const petName = request.pet_name?.trim();
+  const namePrefix = [ownerName, petName ? `（${petName}）` : ""].filter(Boolean).join("");
+  const greeting = namePrefix ? `${namePrefix}您好，` : "您好，";
+
+  return `${greeting}已確認您的預約：${dateText} ${timeText}，服務項目：${request.service}。這是 Sandbox 模擬確認訊息，不會真的通知客人。`;
+}
+
 export default function AppointmentRequestsPage() {
   const [requests, setRequests] = useState<AppointmentRequest[]>(mockAppointmentRequests);
   const [notice, setNotice] = useState<string>(isSupabaseConfigured ? "" : supabaseEnvWarning);
@@ -215,6 +243,11 @@ export default function AppointmentRequestsPage() {
                       {isSandbox ? (
                         <p className="mt-3 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
                           這是 Sandbox 測試預約，不會通知客人。
+                        </p>
+                      ) : null}
+                      {isSandbox && request.status === "confirmed" ? (
+                        <p className="mt-3 rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-800">
+                          {buildSandboxConfirmedMessage(request)}
                         </p>
                       ) : null}
                     </div>
