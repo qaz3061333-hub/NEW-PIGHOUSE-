@@ -9,7 +9,7 @@ import { AppointmentRequest, AppointmentStatus } from "@/lib/types";
 
 const statusOptions: AppointmentStatus[] = ["pending", "confirmed", "proposed_new_time", "rejected"];
 
-function splitRequestedAt(requestedAt: string): { dateText: string; timeText: string } {
+function fallbackSplitRequestedAt(requestedAt: string): { dateText: string; timeText: string } {
   const trimmed = requestedAt.trim();
   if (!trimmed) {
     return { dateText: "未提供日期", timeText: "未提供時間" };
@@ -27,8 +27,43 @@ function splitRequestedAt(requestedAt: string): { dateText: string; timeText: st
   };
 }
 
+function formatRequestedAtForTaipei(requestedAt: string): { dateText: string; timeText: string } {
+  const parsed = new Date(requestedAt);
+  if (Number.isNaN(parsed.getTime())) {
+    return fallbackSplitRequestedAt(requestedAt);
+  }
+
+  const formatter = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Taipei",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  });
+
+  const parts = formatter.formatToParts(parsed);
+  const getPart = (type: Intl.DateTimeFormatPartTypes) => parts.find((part) => part.type === type)?.value || "";
+
+  const year = getPart("year");
+  const month = getPart("month");
+  const day = getPart("day");
+  const hour = getPart("hour");
+  const minute = getPart("minute");
+
+  if (!year || !month || !day || !hour || !minute) {
+    return fallbackSplitRequestedAt(requestedAt);
+  }
+
+  return {
+    dateText: `${year}-${month}-${day}`,
+    timeText: `${hour}:${minute}`,
+  };
+}
+
 function buildSandboxConfirmedMessage(request: AppointmentRequest): string {
-  const { dateText, timeText } = splitRequestedAt(request.requested_at);
+  const { dateText, timeText } = formatRequestedAtForTaipei(request.requested_at);
   const ownerName = request.owner_name?.trim();
   const petName = request.pet_name?.trim();
   const namePrefix = [ownerName, petName ? `（${petName}）` : ""].filter(Boolean).join("");
