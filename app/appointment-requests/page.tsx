@@ -79,6 +79,7 @@ export default function AppointmentRequestsPage() {
   const [actionMessageType, setActionMessageType] = useState<"success" | "error">("success");
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [sandboxProposedTimes, setSandboxProposedTimes] = useState<Record<string, string>>({});
+  const [sandboxProposedConfirmations, setSandboxProposedConfirmations] = useState<Record<string, boolean>>({});
 
   useEffect(() => {
     async function load() {
@@ -300,6 +301,14 @@ export default function AppointmentRequestsPage() {
                       {isSandbox && request.status === "proposed_new_time" ? (
                         <div className="mt-3 rounded-md border border-sky-200 bg-sky-50 px-3 py-3 text-sm text-sky-900">
                           <h4 className="text-sm font-semibold text-sky-900">Sandbox 改時間建議</h4>
+                          {(() => {
+                            const proposedTimeValue = sandboxProposedTimes[request.id] ?? "";
+                            const trimmedProposedTime = proposedTimeValue.trim();
+                            const hasProposedTime = Boolean(trimmedProposedTime);
+                            const isConfirmed = sandboxProposedConfirmations[request.id] ?? false;
+
+                            return (
+                              <>
                           <label className="mt-2 block text-sm font-medium text-sky-900" htmlFor={`proposed-time-${request.id}`}>
                             建議新時間
                           </label>
@@ -308,20 +317,40 @@ export default function AppointmentRequestsPage() {
                             type="text"
                             className="mt-1 w-full rounded border border-sky-300 bg-white px-2 py-1 text-sm text-slate-800"
                             placeholder="例如：2026-04-29 14:00"
-                            value={sandboxProposedTimes[request.id] ?? ""}
-                            onChange={(event) =>
-                              setSandboxProposedTimes((prev) => ({ ...prev, [request.id]: event.target.value }))
-                            }
+                            value={proposedTimeValue}
+                            onChange={(event) => {
+                              const nextValue = event.target.value;
+                              setSandboxProposedTimes((prev) => ({ ...prev, [request.id]: nextValue }));
+                              setSandboxProposedConfirmations((prev) => ({ ...prev, [request.id]: false }));
+                            }}
                           />
-                          {sandboxProposedTimes[request.id]?.trim() ? (
+                          <button
+                            type="button"
+                            className="mt-3 rounded border border-sky-300 bg-white px-3 py-1 text-sm font-medium text-sky-900 enabled:hover:bg-sky-100 disabled:cursor-not-allowed disabled:opacity-50"
+                            disabled={!hasProposedTime}
+                            onClick={() =>
+                              setSandboxProposedConfirmations((prev) => ({ ...prev, [request.id]: true }))
+                            }
+                          >
+                            確認產生改約訊息
+                          </button>
+                          {isConfirmed ? (
+                            <p className="mt-3 rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-800">
+                              已產生 Sandbox 改約訊息。這只是前端模擬，不會真的通知客人。
+                            </p>
+                          ) : null}
+                          {hasProposedTime ? (
                             <p className="mt-3 rounded-md border border-sky-300 bg-white px-3 py-2 text-sm text-slate-800">
-                              {buildSandboxProposedNewTimeMessage(request, sandboxProposedTimes[request.id].trim())}
+                              {buildSandboxProposedNewTimeMessage(request, trimmedProposedTime)}
                             </p>
                           ) : (
                             <p className="mt-3 text-sm text-sky-800">
                               請輸入建議新時間後，這裡會產生 Sandbox 改約建議文字。
                             </p>
                           )}
+                              </>
+                            );
+                          })()}
                         </div>
                       ) : null}
                     </div>
