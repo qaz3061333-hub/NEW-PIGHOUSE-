@@ -72,6 +72,15 @@ function buildSandboxConfirmedMessage(request: AppointmentRequest): string {
   return `${greeting}已確認您的預約：${dateText} ${timeText}，服務項目：${request.service}。這是 Sandbox 模擬確認訊息，不會真的通知客人。`;
 }
 
+type SandboxProposedNewTimeResult = {
+  success: boolean;
+  time_status: "valid" | "unclear" | "past";
+  interpreted_time: string | null;
+  customer_reply: string | null;
+  needs_clarification: boolean;
+  staff_note: string;
+};
+
 export default function AppointmentRequestsPage() {
   const [requests, setRequests] = useState<AppointmentRequest[]>(mockAppointmentRequests);
   const [notice, setNotice] = useState<string>(isSupabaseConfigured ? "" : supabaseEnvWarning);
@@ -80,6 +89,10 @@ export default function AppointmentRequestsPage() {
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [sandboxProposedTimes, setSandboxProposedTimes] = useState<Record<string, string>>({});
   const [sandboxProposedConfirmations, setSandboxProposedConfirmations] = useState<Record<string, boolean>>({});
+  const [sandboxStaffNotes, setSandboxStaffNotes] = useState<Record<string, string>>({});
+  const [sandboxGeminiLoading, setSandboxGeminiLoading] = useState<Record<string, boolean>>({});
+  const [sandboxGeminiErrors, setSandboxGeminiErrors] = useState<Record<string, string>>({});
+  const [sandboxGeminiResults, setSandboxGeminiResults] = useState<Record<string, SandboxProposedNewTimeResult | null>>({});
 
   useEffect(() => {
     async function load() {
@@ -177,6 +190,45 @@ export default function AppointmentRequestsPage() {
     const service = request.service?.trim() || "未提供服務項目";
 
     return `${greeting}原預約 ${dateText} ${timeText}，服務項目：${service}。目前該時段需要改約，建議新時間：${proposedNewTime}。這是 Sandbox 模擬改約訊息，不會真的通知客人。`;
+  }
+
+  async function generateSandboxProposedNewTimeWithGemini(request: AppointmentRequest) {
+    const staffNote = (sandboxStaffNotes[request.id] ?? "").trim();
+    if (!staffNote) return;
+
+    setSandboxGeminiLoading((prev) => ({ ...prev, [request.id]: true }));
+    setSandboxGeminiErrors((prev) => ({ ...prev, [request.id]: "" }));
+
+    try {
+      const response = await fetch("/api/sandbox/proposed-new-time", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          request_id: request.id,
+          staff_note: staffNote,
+          service: request.service,
+          owner_name: request.owner_name,
+          pet_name: request.pet_name,
+          requested_at: request.requested_at,
+          is_sandbox: request.is_sandbox ?? false,
+          status: request.status,
+        }),
+      });
+
+      const payload = (await response.json()) as { result?: SandboxProposedNewTimeResult; error?: string };
+
+      if (!response.ok || !payload.result) {
+        const fallbackMessage = "Gemini 沙盒轉換失敗，請稍後再試。";
+        throw new Error(payload.error?.trim() || fallbackMessage);
+      }
+
+      setSandboxGeminiResults((prev) => ({ ...prev, [request.id]: payload.result! }));
+    } catch (error) {
+      setSandboxGeminiResults((prev) => ({ ...prev, [request.id]: null }));
+      setSandboxGeminiErrors((prev) => ({ ...prev, [request.id]: (error as Error).message }));
+    } finally {
+      setSandboxGeminiLoading((prev) => ({ ...prev, [request.id]: false }));
+    }
   }
 
   return (
@@ -306,6 +358,11 @@ export default function AppointmentRequestsPage() {
                             const trimmedProposedTime = proposedTimeValue.trim();
                             const hasProposedTime = Boolean(trimmedProposedTime);
                             const isConfirmed = sandboxProposedConfirmations[request.id] ?? false;
+                            const staffNoteValue = sandboxStaffNotes[request.id] ?? "";
+                            const hasStaffNote = Boolean(staffNoteValue.trim());
+                            const geminiLoading = sandboxGeminiLoading[request.id] ?? false;
+                            const geminiError = sandboxGeminiErrors[request.id] ?? "";
+                            const geminiResult = sandboxGeminiResults[request.id];
 
                             return (
                               <>
@@ -348,6 +405,61 @@ export default function AppointmentRequestsPage() {
                               請輸入建議新時間後，這裡會產生 Sandbox 改約建議文字。
                             </p>
                           )}
+                          <div className="mt-4 rounded-md border border-indigo-200 bg-indigo-50 px-3 py-3">
+                            <h5 className="text-sm font-semibold text-indigo-900">Gemini 沙盒轉換</h5>
+                            <label className="mt-2 block text-sm font-medium text-indigo-900" htmlFor={`staff-note-${request.id}`}>
+                              員工改約說明
+                            </label>
+                            <textarea
+                              id={`staff-note-${request.id}`}
+                              className="mt-1 min-h-20 w-full rounded border border-indigo-300 bg-white px-2 py-1 text-sm text-slate-800"
+                              placeholder="例如：明天3點可以，請幫我禮貌通知客人"
+                              value={staffNoteValue}
+                              onChange={(event) => {
+                                const nextValue = event.target.value;
+                                setSandboxStaffNotes((prev) => ({ ...prev, [request.id]: nextValue }));
+                                setSandboxGeminiErrors((prev) => ({ ...prev, [request.id]: "" }));
+                              }}
+                            />
+                            <button
+                              type="button"
+                              className="mt-3 rounded border border-indigo-300 bg-white px-3 py-1 text-sm font-medium text-indigo-900 enabled:hover:bg-indigo-100 disabled:cursor-not-allowed disabled:opacity-50"
+                              disabled={!hasStaffNote || geminiLoading}
+                              onClick={() => generateSandboxProposedNewTimeWithGemini(request)}
+                            >
+                              {geminiLoading ? "Gemini 處理中…" : "用 Gemini 產生沙盒回覆"}
+                            </button>
+                            {geminiError ? (
+                              <p className="mt-3 rounded-md border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-800">
+                                {geminiError}
+                              </p>
+                            ) : null}
+                            {geminiResult ? (
+                              <div className="mt-3 space-y-2">
+                                {geminiResult.interpreted_time ? (
+                                  <p className="rounded-md border border-indigo-200 bg-white px-3 py-2 text-sm text-slate-800">
+                                    <span className="font-semibold text-indigo-900">Gemini 理解的新時間：</span>
+                                    {geminiResult.interpreted_time}
+                                  </p>
+                                ) : null}
+                                {geminiResult.customer_reply ? (
+                                  <p className="rounded-md border border-indigo-200 bg-white px-3 py-2 text-sm text-slate-800">
+                                    <span className="font-semibold text-indigo-900">Sandbox 改約回覆草稿：</span>
+                                    {geminiResult.customer_reply}
+                                  </p>
+                                ) : null}
+                                {geminiResult.needs_clarification ? (
+                                  <p className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+                                    {geminiResult.staff_note}
+                                  </p>
+                                ) : (
+                                  <p className="rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-800">
+                                    {geminiResult.staff_note}
+                                  </p>
+                                )}
+                              </div>
+                            ) : null}
+                          </div>
                               </>
                             );
                           })()}
