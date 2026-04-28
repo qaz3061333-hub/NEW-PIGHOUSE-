@@ -87,12 +87,11 @@ export default function AppointmentRequestsPage() {
   const [actionMessage, setActionMessage] = useState<string>("");
   const [actionMessageType, setActionMessageType] = useState<"success" | "error">("success");
   const [expandedId, setExpandedId] = useState<string | null>(null);
-  const [sandboxProposedTimes, setSandboxProposedTimes] = useState<Record<string, string>>({});
-  const [sandboxProposedConfirmations, setSandboxProposedConfirmations] = useState<Record<string, boolean>>({});
   const [sandboxStaffNotes, setSandboxStaffNotes] = useState<Record<string, string>>({});
   const [sandboxGeminiLoading, setSandboxGeminiLoading] = useState<Record<string, boolean>>({});
   const [sandboxGeminiErrors, setSandboxGeminiErrors] = useState<Record<string, string>>({});
   const [sandboxGeminiResults, setSandboxGeminiResults] = useState<Record<string, SandboxProposedNewTimeResult | null>>({});
+  const [sandboxGeminiConfirmations, setSandboxGeminiConfirmations] = useState<Record<string, boolean>>({});
 
   useEffect(() => {
     async function load() {
@@ -133,6 +132,12 @@ export default function AppointmentRequestsPage() {
       }
       const normalized = { ...updated[0], is_sandbox: updated[0].is_sandbox ?? false };
       setRequests((prev) => prev.map((item) => (item.id === id ? normalized : item)));
+      if (status !== "proposed_new_time") {
+        setSandboxStaffNotes((prev) => ({ ...prev, [id]: "" }));
+        setSandboxGeminiErrors((prev) => ({ ...prev, [id]: "" }));
+        setSandboxGeminiResults((prev) => ({ ...prev, [id]: null }));
+        setSandboxGeminiConfirmations((prev) => ({ ...prev, [id]: false }));
+      }
       setNotice("");
     } catch (error) {
       setNotice(`狀態更新失敗：${(error as Error).message}`);
@@ -179,17 +184,6 @@ export default function AppointmentRequestsPage() {
       setActionMessage(`刪除失敗：${(error as Error).message}`);
       setActionMessageType("error");
     }
-  }
-
-  function buildSandboxProposedNewTimeMessage(request: AppointmentRequest, proposedNewTime: string): string {
-    const { dateText, timeText } = formatRequestedAtForTaipei(request.requested_at);
-    const ownerName = request.owner_name?.trim();
-    const petName = request.pet_name?.trim();
-    const namePrefix = [ownerName, petName ? `（${petName}）` : ""].filter(Boolean).join("");
-    const greeting = namePrefix ? `${namePrefix}您好，` : "您好，";
-    const service = request.service?.trim() || "未提供服務項目";
-
-    return `${greeting}原預約 ${dateText} ${timeText}，服務項目：${service}。目前該時段需要改約，建議新時間：${proposedNewTime}。這是 Sandbox 模擬改約訊息，不會真的通知客人。`;
   }
 
   async function generateSandboxProposedNewTimeWithGemini(request: AppointmentRequest) {
@@ -350,63 +344,26 @@ export default function AppointmentRequestsPage() {
                           {buildSandboxConfirmedMessage(request)}
                         </p>
                       ) : null}
-                      {isSandbox && request.status === "proposed_new_time" ? (
-                        <div className="mt-3 rounded-md border border-sky-200 bg-sky-50 px-3 py-3 text-sm text-sky-900">
-                          <h4 className="text-sm font-semibold text-sky-900">Sandbox 改時間建議</h4>
-                          {(() => {
-                            const proposedTimeValue = sandboxProposedTimes[request.id] ?? "";
-                            const trimmedProposedTime = proposedTimeValue.trim();
-                            const hasProposedTime = Boolean(trimmedProposedTime);
-                            const isConfirmed = sandboxProposedConfirmations[request.id] ?? false;
-                            const staffNoteValue = sandboxStaffNotes[request.id] ?? "";
-                            const hasStaffNote = Boolean(staffNoteValue.trim());
-                            const geminiLoading = sandboxGeminiLoading[request.id] ?? false;
-                            const geminiError = sandboxGeminiErrors[request.id] ?? "";
-                            const geminiResult = sandboxGeminiResults[request.id];
+                    </div>
+                  </td>
+                </tr>
+              ) : null}
+              {isSandbox && request.status === "proposed_new_time" ? (
+                <tr className="bg-indigo-50/60">
+                  <td className="px-4 py-3" colSpan={8}>
+                    <div className="rounded-md border border-indigo-200 bg-indigo-50 px-3 py-3">
+                      <h4 className="text-sm font-semibold text-indigo-900">Gemini 沙盒改約回覆</h4>
+                      {(() => {
+                        const staffNoteValue = sandboxStaffNotes[request.id] ?? "";
+                        const hasStaffNote = Boolean(staffNoteValue.trim());
+                        const geminiLoading = sandboxGeminiLoading[request.id] ?? false;
+                        const geminiError = sandboxGeminiErrors[request.id] ?? "";
+                        const geminiResult = sandboxGeminiResults[request.id];
+                        const isConfirmed = sandboxGeminiConfirmations[request.id] ?? false;
+                        const hasCustomerReply = Boolean(geminiResult?.customer_reply?.trim());
 
-                            return (
-                              <>
-                          <label className="mt-2 block text-sm font-medium text-sky-900" htmlFor={`proposed-time-${request.id}`}>
-                            建議新時間
-                          </label>
-                          <input
-                            id={`proposed-time-${request.id}`}
-                            type="text"
-                            className="mt-1 w-full rounded border border-sky-300 bg-white px-2 py-1 text-sm text-slate-800"
-                            placeholder="例如：2026-04-29 14:00"
-                            value={proposedTimeValue}
-                            onChange={(event) => {
-                              const nextValue = event.target.value;
-                              setSandboxProposedTimes((prev) => ({ ...prev, [request.id]: nextValue }));
-                              setSandboxProposedConfirmations((prev) => ({ ...prev, [request.id]: false }));
-                            }}
-                          />
-                          <button
-                            type="button"
-                            className="mt-3 rounded border border-sky-300 bg-white px-3 py-1 text-sm font-medium text-sky-900 enabled:hover:bg-sky-100 disabled:cursor-not-allowed disabled:opacity-50"
-                            disabled={!hasProposedTime}
-                            onClick={() =>
-                              setSandboxProposedConfirmations((prev) => ({ ...prev, [request.id]: true }))
-                            }
-                          >
-                            確認產生改約訊息
-                          </button>
-                          {isConfirmed ? (
-                            <p className="mt-3 rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-800">
-                              已產生 Sandbox 改約訊息。這只是前端模擬，不會真的通知客人。
-                            </p>
-                          ) : null}
-                          {hasProposedTime ? (
-                            <p className="mt-3 rounded-md border border-sky-300 bg-white px-3 py-2 text-sm text-slate-800">
-                              {buildSandboxProposedNewTimeMessage(request, trimmedProposedTime)}
-                            </p>
-                          ) : (
-                            <p className="mt-3 text-sm text-sky-800">
-                              請輸入建議新時間後，這裡會產生 Sandbox 改約建議文字。
-                            </p>
-                          )}
-                          <div className="mt-4 rounded-md border border-indigo-200 bg-indigo-50 px-3 py-3">
-                            <h5 className="text-sm font-semibold text-indigo-900">Gemini 沙盒轉換</h5>
+                        return (
+                          <>
                             <label className="mt-2 block text-sm font-medium text-indigo-900" htmlFor={`staff-note-${request.id}`}>
                               員工改約說明
                             </label>
@@ -419,6 +376,8 @@ export default function AppointmentRequestsPage() {
                                 const nextValue = event.target.value;
                                 setSandboxStaffNotes((prev) => ({ ...prev, [request.id]: nextValue }));
                                 setSandboxGeminiErrors((prev) => ({ ...prev, [request.id]: "" }));
+                                setSandboxGeminiResults((prev) => ({ ...prev, [request.id]: null }));
+                                setSandboxGeminiConfirmations((prev) => ({ ...prev, [request.id]: false }));
                               }}
                             />
                             <button
@@ -457,14 +416,34 @@ export default function AppointmentRequestsPage() {
                                     {geminiResult.staff_note}
                                   </p>
                                 )}
+                                {hasCustomerReply ? (
+                                  <button
+                                    type="button"
+                                    className="rounded border border-emerald-300 bg-white px-3 py-1 text-sm font-medium text-emerald-900 enabled:hover:bg-emerald-100 disabled:cursor-not-allowed disabled:opacity-50"
+                                    disabled={isConfirmed}
+                                    onClick={() =>
+                                      setSandboxGeminiConfirmations((prev) => ({ ...prev, [request.id]: true }))
+                                    }
+                                  >
+                                    {isConfirmed ? "已確認送出沙盒回覆" : "確認送出沙盒回覆"}
+                                  </button>
+                                ) : null}
                               </div>
                             ) : null}
-                          </div>
-                              </>
-                            );
-                          })()}
-                        </div>
-                      ) : null}
+                            {isConfirmed && geminiResult?.customer_reply ? (
+                              <div className="mt-3 rounded-md border border-emerald-200 bg-emerald-50 px-3 py-3 text-sm text-emerald-900">
+                                <h5 className="font-semibold">Sandbox 客戶端收到的回覆</h5>
+                                <p className="mt-2 rounded border border-emerald-200 bg-white px-3 py-2 text-slate-800">
+                                  {geminiResult.customer_reply}
+                                </p>
+                                <p className="mt-2 text-sm text-emerald-900">
+                                  這只是 Sandbox 模擬送出，不會真的通知客人。
+                                </p>
+                              </div>
+                            ) : null}
+                          </>
+                        );
+                      })()}
                     </div>
                   </td>
                 </tr>
