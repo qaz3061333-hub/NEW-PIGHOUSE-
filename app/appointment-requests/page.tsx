@@ -81,6 +81,13 @@ type SandboxProposedNewTimeResult = {
   staff_note: string;
 };
 
+type SandboxRejectedReplyResult = {
+  success: boolean;
+  customer_reply: string | null;
+  needs_clarification: boolean;
+  staff_note: string;
+};
+
 export default function AppointmentRequestsPage() {
   const [requests, setRequests] = useState<AppointmentRequest[]>(mockAppointmentRequests);
   const [notice, setNotice] = useState<string>(isSupabaseConfigured ? "" : supabaseEnvWarning);
@@ -92,6 +99,11 @@ export default function AppointmentRequestsPage() {
   const [sandboxGeminiErrors, setSandboxGeminiErrors] = useState<Record<string, string>>({});
   const [sandboxGeminiResults, setSandboxGeminiResults] = useState<Record<string, SandboxProposedNewTimeResult | null>>({});
   const [sandboxGeminiConfirmations, setSandboxGeminiConfirmations] = useState<Record<string, boolean>>({});
+  const [sandboxRejectedNotes, setSandboxRejectedNotes] = useState<Record<string, string>>({});
+  const [sandboxRejectedLoading, setSandboxRejectedLoading] = useState<Record<string, boolean>>({});
+  const [sandboxRejectedErrors, setSandboxRejectedErrors] = useState<Record<string, string>>({});
+  const [sandboxRejectedResults, setSandboxRejectedResults] = useState<Record<string, SandboxRejectedReplyResult | null>>({});
+  const [sandboxRejectedConfirmations, setSandboxRejectedConfirmations] = useState<Record<string, boolean>>({});
 
   useEffect(() => {
     async function load() {
@@ -112,6 +124,19 @@ export default function AppointmentRequestsPage() {
   }, []);
 
   async function updateStatus(id: string, status: AppointmentStatus) {
+    if (status !== "proposed_new_time") {
+      setSandboxStaffNotes((prev) => ({ ...prev, [id]: "" }));
+      setSandboxGeminiErrors((prev) => ({ ...prev, [id]: "" }));
+      setSandboxGeminiResults((prev) => ({ ...prev, [id]: null }));
+      setSandboxGeminiConfirmations((prev) => ({ ...prev, [id]: false }));
+    }
+    if (status !== "rejected") {
+      setSandboxRejectedNotes((prev) => ({ ...prev, [id]: "" }));
+      setSandboxRejectedErrors((prev) => ({ ...prev, [id]: "" }));
+      setSandboxRejectedResults((prev) => ({ ...prev, [id]: null }));
+      setSandboxRejectedConfirmations((prev) => ({ ...prev, [id]: false }));
+    }
+
     if (!isSupabaseConfigured) {
       setRequests((prev) => prev.map((item) => (item.id === id ? { ...item, status } : item)));
       setNotice(supabaseEnvWarning);
@@ -132,12 +157,6 @@ export default function AppointmentRequestsPage() {
       }
       const normalized = { ...updated[0], is_sandbox: updated[0].is_sandbox ?? false };
       setRequests((prev) => prev.map((item) => (item.id === id ? normalized : item)));
-      if (status !== "proposed_new_time") {
-        setSandboxStaffNotes((prev) => ({ ...prev, [id]: "" }));
-        setSandboxGeminiErrors((prev) => ({ ...prev, [id]: "" }));
-        setSandboxGeminiResults((prev) => ({ ...prev, [id]: null }));
-        setSandboxGeminiConfirmations((prev) => ({ ...prev, [id]: false }));
-      }
       setNotice("");
     } catch (error) {
       setNotice(`狀態更新失敗：${(error as Error).message}`);
@@ -222,6 +241,44 @@ export default function AppointmentRequestsPage() {
       setSandboxGeminiErrors((prev) => ({ ...prev, [request.id]: (error as Error).message }));
     } finally {
       setSandboxGeminiLoading((prev) => ({ ...prev, [request.id]: false }));
+    }
+  }
+
+  async function generateSandboxRejectedReplyWithGemini(request: AppointmentRequest) {
+    const rejectionNote = (sandboxRejectedNotes[request.id] ?? "").trim();
+    if (!rejectionNote) return;
+
+    setSandboxRejectedLoading((prev) => ({ ...prev, [request.id]: true }));
+    setSandboxRejectedErrors((prev) => ({ ...prev, [request.id]: "" }));
+
+    try {
+      const response = await fetch("/api/sandbox/rejected-reply", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          request_id: request.id,
+          rejection_note: rejectionNote,
+          service: request.service,
+          owner_name: request.owner_name,
+          pet_name: request.pet_name,
+          requested_at: request.requested_at,
+          is_sandbox: request.is_sandbox ?? false,
+          status: request.status,
+        }),
+      });
+
+      const payload = (await response.json()) as { result?: SandboxRejectedReplyResult; error?: string };
+      if (!response.ok || !payload.result) {
+        const fallbackMessage = "Gemini 沙盒拒絕回覆失敗，請稍後再試。";
+        throw new Error(payload.error?.trim() || fallbackMessage);
+      }
+
+      setSandboxRejectedResults((prev) => ({ ...prev, [request.id]: payload.result! }));
+    } catch (error) {
+      setSandboxRejectedResults((prev) => ({ ...prev, [request.id]: null }));
+      setSandboxRejectedErrors((prev) => ({ ...prev, [request.id]: (error as Error).message }));
+    } finally {
+      setSandboxRejectedLoading((prev) => ({ ...prev, [request.id]: false }));
     }
   }
 
@@ -435,6 +492,100 @@ export default function AppointmentRequestsPage() {
                                 <h5 className="font-semibold">Sandbox 客戶端收到的回覆</h5>
                                 <p className="mt-2 rounded border border-emerald-200 bg-white px-3 py-2 text-slate-800">
                                   {geminiResult.customer_reply}
+                                </p>
+                                <p className="mt-2 text-sm text-emerald-900">
+                                  這只是 Sandbox 模擬送出，不會真的通知客人。
+                                </p>
+                              </div>
+                            ) : null}
+                          </>
+                        );
+                      })()}
+                    </div>
+                  </td>
+                </tr>
+              ) : null}
+              {isSandbox && request.status === "rejected" ? (
+                <tr className="bg-rose-50/50">
+                  <td className="px-4 py-3" colSpan={8}>
+                    <div className="rounded-md border border-rose-200 bg-rose-50 px-3 py-3">
+                      <h4 className="text-sm font-semibold text-rose-900">Gemini 沙盒拒絕回覆</h4>
+                      {(() => {
+                        const rejectedNoteValue = sandboxRejectedNotes[request.id] ?? "";
+                        const hasRejectedNote = Boolean(rejectedNoteValue.trim());
+                        const rejectedLoading = sandboxRejectedLoading[request.id] ?? false;
+                        const rejectedError = sandboxRejectedErrors[request.id] ?? "";
+                        const rejectedResult = sandboxRejectedResults[request.id];
+                        const isRejectedConfirmed = sandboxRejectedConfirmations[request.id] ?? false;
+                        const hasCustomerReply = Boolean(rejectedResult?.customer_reply?.trim());
+
+                        return (
+                          <>
+                            <label className="mt-2 block text-sm font-medium text-rose-900" htmlFor={`rejected-note-${request.id}`}>
+                              員工拒絕原因
+                            </label>
+                            <textarea
+                              id={`rejected-note-${request.id}`}
+                              className="mt-1 min-h-20 w-full rounded border border-rose-300 bg-white px-2 py-1 text-sm text-slate-800"
+                              placeholder="例如：今天美容時段已滿，請幫我禮貌告知客人"
+                              value={rejectedNoteValue}
+                              onChange={(event) => {
+                                const nextValue = event.target.value;
+                                setSandboxRejectedNotes((prev) => ({ ...prev, [request.id]: nextValue }));
+                                setSandboxRejectedErrors((prev) => ({ ...prev, [request.id]: "" }));
+                                setSandboxRejectedResults((prev) => ({ ...prev, [request.id]: null }));
+                                setSandboxRejectedConfirmations((prev) => ({ ...prev, [request.id]: false }));
+                              }}
+                            />
+                            <button
+                              type="button"
+                              className="mt-3 rounded border border-rose-300 bg-white px-3 py-1 text-sm font-medium text-rose-900 enabled:hover:bg-rose-100 disabled:cursor-not-allowed disabled:opacity-50"
+                              disabled={!hasRejectedNote || rejectedLoading}
+                              onClick={() => generateSandboxRejectedReplyWithGemini(request)}
+                            >
+                              {rejectedLoading ? "Gemini 處理中…" : "用 Gemini 產生沙盒拒絕回覆"}
+                            </button>
+                            {rejectedError ? (
+                              <p className="mt-3 rounded-md border border-rose-200 bg-white px-3 py-2 text-sm text-rose-800">
+                                {rejectedError}
+                              </p>
+                            ) : null}
+                            {rejectedResult ? (
+                              <div className="mt-3 space-y-2">
+                                {rejectedResult.customer_reply ? (
+                                  <p className="rounded-md border border-rose-200 bg-white px-3 py-2 text-sm text-slate-800">
+                                    <span className="font-semibold text-rose-900">Sandbox 拒絕回覆草稿：</span>
+                                    {rejectedResult.customer_reply}
+                                  </p>
+                                ) : null}
+                                {rejectedResult.needs_clarification ? (
+                                  <p className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+                                    {rejectedResult.staff_note}
+                                  </p>
+                                ) : (
+                                  <p className="rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-800">
+                                    {rejectedResult.staff_note}
+                                  </p>
+                                )}
+                                {hasCustomerReply ? (
+                                  <button
+                                    type="button"
+                                    className="rounded border border-emerald-300 bg-white px-3 py-1 text-sm font-medium text-emerald-900 enabled:hover:bg-emerald-100 disabled:cursor-not-allowed disabled:opacity-50"
+                                    disabled={isRejectedConfirmed}
+                                    onClick={() =>
+                                      setSandboxRejectedConfirmations((prev) => ({ ...prev, [request.id]: true }))
+                                    }
+                                  >
+                                    {isRejectedConfirmed ? "已確認送出沙盒回覆" : "確認送出沙盒回覆"}
+                                  </button>
+                                ) : null}
+                              </div>
+                            ) : null}
+                            {isRejectedConfirmed && rejectedResult?.customer_reply ? (
+                              <div className="mt-3 rounded-md border border-emerald-200 bg-emerald-50 px-3 py-3 text-sm text-emerald-900">
+                                <h5 className="font-semibold">Sandbox 客戶端收到的回覆</h5>
+                                <p className="mt-2 rounded border border-emerald-200 bg-white px-3 py-2 text-slate-800">
+                                  {rejectedResult.customer_reply}
                                 </p>
                                 <p className="mt-2 text-sm text-emerald-900">
                                   這只是 Sandbox 模擬送出，不會真的通知客人。
