@@ -307,17 +307,70 @@ Appointment Requests 頁面可看到該筆 Sandbox 預約。
 - 已用 Sandbox 預約驗收刪除成功
 - `lib/supabaseClient.ts` 已新增 DELETE method 支援
 
-### 4. Appointment Requests 尚未完成
+### 4. Appointment Requests confirmed 沙盒處理流程（已完成）
 
-目前 status 下拉可以更新 DB，但還只是基礎狀態更新。
+當 Sandbox 預約 status = `confirmed` 時：
 
-尚未完成：
+- 該列下方會直接顯示「Sandbox 確認預約回覆」
+- 不需要按「查看詳情」
+- 可按「確認送出沙盒回覆」
+- 會回寫到 Conversation Logs 的 localStorage 沙盒事件
+- 不送 LINE
+- 不寫 Supabase `messages`
+- 不通知真客人
 
-- confirmed：確認預約後產生沙盒確認回覆文字
-- proposed_new_time：選擇後跳出員工可填寫一個或多個可改約時間
-- rejected：選擇後跳出拒絕原因欄位
-- Appointment Requests 處理結果回寫到 Conversation Logs 沙盒對話
-- 客人回覆新時間後覆蓋 / 更新原本預約申請
+### 5. Appointment Requests proposed_new_time Gemini 沙盒改約流程（已完成）
+
+當 Sandbox 預約 status = `proposed_new_time` 時：
+
+- 該列下方會直接顯示「Gemini 沙盒改約回覆」
+- 員工可輸入自然語句（例如「明天3點」「後天三點」）
+- 透過 server-side API route 呼叫 Gemini
+- Gemini 產生 `interpreted_time` 與 `customer_reply`
+- 可按「確認送出沙盒回覆」
+- 會回寫到 Conversation Logs 的 localStorage 沙盒事件
+- 不送 LINE
+- 不寫 Supabase `messages`
+- 不通知真客人
+
+### 6. Appointment Requests rejected Gemini 沙盒拒絕流程（已完成）
+
+當 Sandbox 預約 status = `rejected` 時：
+
+- 該列下方會直接顯示「Gemini 沙盒拒絕回覆」
+- 員工可輸入拒絕原因
+- 透過 server-side API route 呼叫 Gemini
+- Gemini 產生禮貌拒絕回覆 `customer_reply`
+- 可按「確認送出沙盒回覆」
+- 會回寫到 Conversation Logs 的 localStorage 沙盒事件
+- 不送 LINE
+- 不寫 Supabase `messages`
+- 不通知真客人
+
+### 7. Appointment Requests → Conversation Logs 沙盒回寫（已完成）
+
+已新增 localStorage helper：
+
+- `lib/sandboxConversationEvents.ts`
+
+localStorage key：
+
+- `new_pighouse_sandbox_conversation_events_v1`
+
+目前 confirmed / proposed_new_time / rejected 的沙盒送出結果都會寫入 localStorage，Conversation Logs 頁面會顯示「Appointment Requests 沙盒回寫訊息」，且可清除這批回寫資料。
+
+此機制是同一瀏覽器內的前端沙盒事件：
+
+- 不寫 Supabase `messages`
+- 不送 LINE
+- 不跨裝置同步
+
+### 8. Appointment Requests「查看詳情」目前定位
+
+- 「查看詳情」功能仍保留
+- 目前只顯示基本資料：id、來源、pet_name、service、owner_name、requested_at、status、is_sandbox、Sandbox 提醒
+- confirmed / proposed_new_time / rejected 的主要操作已改為選擇 status 後直接在列下方顯示
+- 不再把主要操作藏在查看詳情裡
 
 ## Manual Reply Tasks 最新狀態
 
@@ -353,7 +406,15 @@ Manual Reply Tasks 已升級為「人工回覆工作台」第一版。
 
 ## 尚未完成的重要功能
 
-### 1. Knowledge Base 尚未接 Gemini 真實回答
+### 1. 客人回覆新時間後，更新原本 Sandbox 預約申請（尚未完成）
+
+例如：`proposed_new_time` 後，客人回覆「好，明天下午三點可以」。
+
+系統需要能理解這是在回應改約，並更新原本 appointment request 的 `requested_at`。
+
+這部分目前還沒做。
+
+### 2. Knowledge Base 尚未接 Gemini 真實回答
 
 目前 Gemini 還沒有查真實 Knowledge Base。
 
@@ -363,15 +424,15 @@ Manual Reply Tasks 已升級為「人工回覆工作台」第一版。
 
 不要把整個知識庫無差別丟給 Gemini。
 
-### 2. Abnormal Alerts 尚未接沙盒建立
+### 3. Abnormal Alerts 尚未接沙盒建立與回饋流程
 
 目前 Gemini 可以判斷 abnormal_alert，但還沒有按鈕建立 Sandbox 異常提醒，也沒有異常處理回饋流程。
 
-### 3. Manual Reply Tasks 尚未接沙盒建立
+### 4. Manual Reply Tasks 尚未接沙盒建立與回饋流程
 
 目前 Gemini 可以判斷 manual_reply_task，但還沒有完整沙盒任務建立與回饋流程。
 
-### 4. 真 LINE 尚未接入
+### 5. 真 LINE 尚未接入
 
 尚未完成：
 
@@ -384,8 +445,11 @@ Manual Reply Tasks 已升級為「人工回覆工作台」第一版。
 - AI 自動回覆 LINE
 - 系統內直接送出 LINE 訊息
 - 跳轉官方 LINE 對話連結
+- 不接 webhook（目前階段）
+- 不發送真 LINE（目前階段）
+- 不通知真客人（目前階段）
 
-### 5. 多分店 API / KEY 設定頁尚未做
+### 6. 多分店 API / KEY 設定頁尚未做
 
 使用者有多間分店，每間 LINE 官方帳號可能不同。
 
@@ -393,7 +457,7 @@ Manual Reply Tasks 已升級為「人工回覆工作台」第一版。
 
 但目前先不要做正式 key 儲存，因為登入、權限與 secret 儲存安全還沒設計。
 
-### 6. 後台登入與 RLS 尚未做
+### 7. 後台登入與 RLS 尚未做
 
 目前仍是 MVP 測試階段，不應直接給員工或外部使用者正式使用。
 
@@ -405,7 +469,7 @@ Manual Reply Tasks 已升級為「人工回覆工作台」第一版。
 - RLS policy 收斂
 - server-side API route 權限控管
 
-### 7. 全站中文化尚未完成
+### 8. 全站中文化尚未完成
 
 目前部分頁面與欄位仍是英文，例如頁面名稱、status 值、priority 值等。
 
@@ -431,29 +495,13 @@ Manual Reply Tasks 已升級為「人工回覆工作台」第一版。
 
 ## 建議下一步
 
-建議下一個最小風險任務是：
+下一個最小風險功能任務：
 
-### Appointment Requests confirmed 流程 v1
-
-目標：
-
-- 當員工把 Sandbox 預約 status 改成 confirmed 時，產生一段沙盒確認回覆文字
-- 例如：`已確認您的預約：日期、時間、服務項目。這是沙盒模擬，不會真的通知客人。`
-- 不送 LINE
-- 不回寫 Conversation Logs
-- 先只在 Appointment Requests 頁面顯示確認訊息
-- 下一階段再處理 proposed_new_time / rejected / 回寫沙盒對話
+### 客人回覆新時間後，更新原本 Sandbox 預約申請 v1
 
 原因：
 
-confirmed 流程最安全，通常不需要新增資料表欄位，適合作為下一個小 PR。
-
-暫時不要一次做：
-
-- confirmed + proposed_new_time + rejected
-- Appointment Requests 回寫 Conversation Logs
-- 真 LINE 發送
-- Gemini 查知識庫
+Appointment Requests 三種處理狀態與 Conversation Logs 沙盒回寫已完成，下一步應補 proposed_new_time 的後續互動：客人接受新時間後，更新原本預約時間。
 
 ## 操作原則
 
