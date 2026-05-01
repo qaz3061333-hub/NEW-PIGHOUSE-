@@ -531,7 +531,7 @@ export default function AppointmentRequestsPage() {
                                 ) : null}
                               </div>
                             ) : null}
-                            {sandboxConversationWritebacks[`${request.id}:rejected`] ? (
+                            {sandboxConversationWritebacks[`${request.id}:proposed_new_time`] ? (
                               <p className="mt-2 rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-900">
                                 已回寫到 Conversation Logs 沙盒對話。這只是 Sandbox 模擬，不會真的通知客人。
                               </p>
