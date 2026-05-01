@@ -425,24 +425,29 @@ export default function AppointmentRequestsPage() {
                           這是 Sandbox 測試預約，不會通知客人。
                         </p>
                       ) : null}
-                      {isSandbox && request.status === "confirmed" ? (
-                        <div className="mt-3">
-                          <p className="rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-800">
-                            {buildSandboxConfirmedMessage(request)}
-                          </p>
-                          <button
-                            type="button"
-                            className="mt-2 rounded border border-emerald-300 bg-white px-3 py-1 text-sm font-medium text-emerald-900 enabled:hover:bg-emerald-100"
-                            onClick={() => appendAppointmentSandboxEvent(request, "confirmed", buildSandboxConfirmedMessage(request))}
-                          >
-                            確認送出沙盒回覆
-                          </button>
-                          {sandboxConversationWritebacks[`${request.id}:confirmed`] ? (
-                            <p className="mt-2 rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-900">
-                              已回寫到 Conversation Logs 沙盒對話。這只是 Sandbox 模擬，不會真的通知客人。
-                            </p>
-                          ) : null}
-                        </div>
+                    </div>
+                  </td>
+                </tr>
+              ) : null}
+              {isSandbox && request.status === "confirmed" ? (
+                <tr className="bg-emerald-50/50">
+                  <td className="px-4 py-3" colSpan={8}>
+                    <div className="rounded-md border border-emerald-200 bg-emerald-50 px-3 py-3">
+                      <h4 className="text-sm font-semibold text-emerald-900">Sandbox 確認預約回覆</h4>
+                      <p className="mt-2 rounded-md border border-emerald-200 bg-white px-3 py-2 text-sm text-slate-800">
+                        {buildSandboxConfirmedMessage(request)}
+                      </p>
+                      <button
+                        type="button"
+                        className="mt-3 rounded border border-emerald-300 bg-white px-3 py-1 text-sm font-medium text-emerald-900 enabled:hover:bg-emerald-100"
+                        onClick={() => appendAppointmentSandboxEvent(request, "confirmed", buildSandboxConfirmedMessage(request))}
+                      >
+                        確認送出沙盒回覆
+                      </button>
+                      {sandboxConversationWritebacks[`${request.id}:confirmed`] ? (
+                        <p className="mt-2 rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-900">
+                          已回寫到 Conversation Logs 沙盒對話。這只是 Sandbox 模擬，不會真的通知客人。
+                        </p>
                       ) : null}
                     </div>
                   </td>
