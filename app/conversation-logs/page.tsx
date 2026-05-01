@@ -7,6 +7,7 @@ import { conversationLogs as mockConversationLogs } from "@/lib/mockData";
 import { EMPTY_ANALYZE_RESULT, SandboxAnalyzeResult } from "@/lib/sandbox";
 import { isSupabaseConfigured, supabaseEnvWarning, supabaseRequest } from "@/lib/supabaseClient";
 import { ConversationLog } from "@/lib/types";
+import { clearSandboxConversationEvents, listSandboxConversationEvents, SandboxConversationEvent } from "@/lib/sandboxConversationEvents";
 
 type ChatMessage = {
   id: string;
@@ -34,6 +35,7 @@ export default function ConversationLogsPage() {
   const [analysisResult, setAnalysisResult] = useState<SandboxAnalyzeResult | null>(null);
   const [chat, setChat] = useState<ChatMessage[]>([]);
   const [sandboxRequestMessage, setSandboxRequestMessage] = useState("");
+  const [appointmentSandboxEvents, setAppointmentSandboxEvents] = useState<SandboxConversationEvent[]>([]);
 
   useEffect(() => {
     async function load() {
@@ -62,6 +64,15 @@ export default function ConversationLogsPage() {
 
     load();
   }, []);
+
+  useEffect(() => {
+    setAppointmentSandboxEvents(listSandboxConversationEvents().filter((event) => event.source === "appointment_requests"));
+  }, []);
+
+  function handleClearAppointmentSandboxEvents() {
+    clearSandboxConversationEvents();
+    setAppointmentSandboxEvents([]);
+  }
 
   const extractedRows = useMemo(() => {
     const data = analysisResult?.extracted ?? EMPTY_ANALYZE_RESULT.extracted;
@@ -261,6 +272,34 @@ export default function ConversationLogsPage() {
                 >
                   {message.content}
                 </div>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <div className="mt-5 rounded-lg border border-cyan-200 bg-cyan-50 p-4">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <h3 className="text-sm font-semibold text-cyan-900">Appointment Requests 沙盒回寫訊息</h3>
+            <button
+              type="button"
+              onClick={handleClearAppointmentSandboxEvents}
+              className="rounded border border-cyan-300 bg-white px-3 py-1 text-sm font-medium text-cyan-900 hover:bg-cyan-100"
+            >
+              清除 Appointment Requests 沙盒回寫
+            </button>
+          </div>
+          <p className="mt-2 text-sm text-cyan-900">
+            這些是 Appointment Requests 回寫的 Sandbox 訊息，不會真的送 LINE，也不是正式 messages 資料。
+          </p>
+          <div className="mt-3 space-y-2">
+            {appointmentSandboxEvents.length === 0 ? <p className="text-sm text-slate-500">目前沒有回寫訊息。</p> : null}
+            {appointmentSandboxEvents.map((event) => (
+              <div key={event.id} className="rounded-lg border border-cyan-200 bg-white p-3 text-sm text-slate-800 shadow-sm">
+                <p className="text-xs text-slate-500">{event.created_at}｜{event.appointment_status}</p>
+                <p className="mt-1 text-xs text-slate-600">
+                  {event.owner_name || "-"} / {event.pet_name || "-"} / {event.service || "-"}
+                </p>
+                <p className="mt-2 rounded-xl bg-cyan-100 px-3 py-2 text-cyan-950">{event.content}</p>
               </div>
             ))}
           </div>

@@ -6,6 +6,7 @@ import { SimpleTable } from "@/components/simple-table";
 import { appointmentRequests as mockAppointmentRequests } from "@/lib/mockData";
 import { isSupabaseConfigured, supabaseEnvWarning, supabaseRequest } from "@/lib/supabaseClient";
 import { AppointmentRequest, AppointmentStatus } from "@/lib/types";
+import { appendSandboxConversationEvent } from "@/lib/sandboxConversationEvents";
 
 const statusOptions: AppointmentStatus[] = ["pending", "confirmed", "proposed_new_time", "rejected"];
 
@@ -104,6 +105,7 @@ export default function AppointmentRequestsPage() {
   const [sandboxRejectedErrors, setSandboxRejectedErrors] = useState<Record<string, string>>({});
   const [sandboxRejectedResults, setSandboxRejectedResults] = useState<Record<string, SandboxRejectedReplyResult | null>>({});
   const [sandboxRejectedConfirmations, setSandboxRejectedConfirmations] = useState<Record<string, boolean>>({});
+  const [sandboxConversationWritebacks, setSandboxConversationWritebacks] = useState<Record<string, boolean>>({});
 
   useEffect(() => {
     async function load() {
@@ -136,6 +138,12 @@ export default function AppointmentRequestsPage() {
       setSandboxRejectedResults((prev) => ({ ...prev, [id]: null }));
       setSandboxRejectedConfirmations((prev) => ({ ...prev, [id]: false }));
     }
+    setSandboxConversationWritebacks((prev) => ({
+      ...prev,
+      [`${id}:confirmed`]: false,
+      [`${id}:proposed_new_time`]: false,
+      [`${id}:rejected`]: false,
+    }));
 
     if (!isSupabaseConfigured) {
       setRequests((prev) => prev.map((item) => (item.id === id ? { ...item, status } : item)));
@@ -242,6 +250,27 @@ export default function AppointmentRequestsPage() {
     } finally {
       setSandboxGeminiLoading((prev) => ({ ...prev, [request.id]: false }));
     }
+  }
+
+
+  function appendAppointmentSandboxEvent(request: AppointmentRequest, status: "confirmed" | "proposed_new_time" | "rejected", content: string) {
+    const trimmedContent = content.trim();
+    if (!trimmedContent) return;
+
+    appendSandboxConversationEvent({
+      id: `${request.id}-${status}`,
+      source: "appointment_requests",
+      appointment_request_id: request.id,
+      appointment_status: status,
+      role: "assistant",
+      content: trimmedContent,
+      owner_name: request.owner_name,
+      pet_name: request.pet_name,
+      service: request.service,
+      created_at: new Date().toISOString(),
+    });
+
+    setSandboxConversationWritebacks((prev) => ({ ...prev, [`${request.id}:${status}`]: true }));
   }
 
   async function generateSandboxRejectedReplyWithGemini(request: AppointmentRequest) {
@@ -397,9 +426,23 @@ export default function AppointmentRequestsPage() {
                         </p>
                       ) : null}
                       {isSandbox && request.status === "confirmed" ? (
-                        <p className="mt-3 rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-800">
-                          {buildSandboxConfirmedMessage(request)}
-                        </p>
+                        <div className="mt-3">
+                          <p className="rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-800">
+                            {buildSandboxConfirmedMessage(request)}
+                          </p>
+                          <button
+                            type="button"
+                            className="mt-2 rounded border border-emerald-300 bg-white px-3 py-1 text-sm font-medium text-emerald-900 enabled:hover:bg-emerald-100"
+                            onClick={() => appendAppointmentSandboxEvent(request, "confirmed", buildSandboxConfirmedMessage(request))}
+                          >
+                            確認送出沙盒回覆
+                          </button>
+                          {sandboxConversationWritebacks[`${request.id}:confirmed`] ? (
+                            <p className="mt-2 rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-900">
+                              已回寫到 Conversation Logs 沙盒對話。這只是 Sandbox 模擬，不會真的通知客人。
+                            </p>
+                          ) : null}
+                        </div>
                       ) : null}
                     </div>
                   </td>
@@ -478,14 +521,20 @@ export default function AppointmentRequestsPage() {
                                     type="button"
                                     className="rounded border border-emerald-300 bg-white px-3 py-1 text-sm font-medium text-emerald-900 enabled:hover:bg-emerald-100 disabled:cursor-not-allowed disabled:opacity-50"
                                     disabled={isConfirmed}
-                                    onClick={() =>
-                                      setSandboxGeminiConfirmations((prev) => ({ ...prev, [request.id]: true }))
-                                    }
+                                    onClick={() => {
+                                      setSandboxGeminiConfirmations((prev) => ({ ...prev, [request.id]: true }));
+                                      appendAppointmentSandboxEvent(request, "proposed_new_time", geminiResult.customer_reply || "");
+                                    }}
                                   >
                                     {isConfirmed ? "已確認送出沙盒回覆" : "確認送出沙盒回覆"}
                                   </button>
                                 ) : null}
                               </div>
+                            ) : null}
+                            {sandboxConversationWritebacks[`${request.id}:rejected`] ? (
+                              <p className="mt-2 rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-900">
+                                已回寫到 Conversation Logs 沙盒對話。這只是 Sandbox 模擬，不會真的通知客人。
+                              </p>
                             ) : null}
                             {isConfirmed && geminiResult?.customer_reply ? (
                               <div className="mt-3 rounded-md border border-emerald-200 bg-emerald-50 px-3 py-3 text-sm text-emerald-900">
@@ -572,14 +621,20 @@ export default function AppointmentRequestsPage() {
                                     type="button"
                                     className="rounded border border-emerald-300 bg-white px-3 py-1 text-sm font-medium text-emerald-900 enabled:hover:bg-emerald-100 disabled:cursor-not-allowed disabled:opacity-50"
                                     disabled={isRejectedConfirmed}
-                                    onClick={() =>
-                                      setSandboxRejectedConfirmations((prev) => ({ ...prev, [request.id]: true }))
-                                    }
+                                    onClick={() => {
+                                      setSandboxRejectedConfirmations((prev) => ({ ...prev, [request.id]: true }));
+                                      appendAppointmentSandboxEvent(request, "rejected", rejectedResult.customer_reply || "");
+                                    }}
                                   >
                                     {isRejectedConfirmed ? "已確認送出沙盒回覆" : "確認送出沙盒回覆"}
                                   </button>
                                 ) : null}
                               </div>
+                            ) : null}
+                            {sandboxConversationWritebacks[`${request.id}:rejected`] ? (
+                              <p className="mt-2 rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-900">
+                                已回寫到 Conversation Logs 沙盒對話。這只是 Sandbox 模擬，不會真的通知客人。
+                              </p>
                             ) : null}
                             {isRejectedConfirmed && rejectedResult?.customer_reply ? (
                               <div className="mt-3 rounded-md border border-emerald-200 bg-emerald-50 px-3 py-3 text-sm text-emerald-900">
