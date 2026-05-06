@@ -16,6 +16,15 @@ type ChatMessage = {
 };
 
 type SandboxHistoryMessage = Pick<ChatMessage, "role" | "content">;
+type RescheduleReplyResult = {
+  success: boolean;
+  action: "accept_new_time" | "unclear" | "decline";
+  time_status: "valid" | "unclear" | "past";
+  preferred_date: string | null;
+  preferred_time: string | null;
+  requested_at_iso: string | null;
+  staff_note: string;
+};
 
 const confidencePercent = (value: number) => `${Math.round(Math.max(0, Math.min(1, value)) * 100)}%`;
 const DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
@@ -36,6 +45,9 @@ export default function ConversationLogsPage() {
   const [chat, setChat] = useState<ChatMessage[]>([]);
   const [sandboxRequestMessage, setSandboxRequestMessage] = useState("");
   const [appointmentSandboxEvents, setAppointmentSandboxEvents] = useState<SandboxConversationEvent[]>([]);
+  const [rescheduleReplies, setRescheduleReplies] = useState<Record<string, string>>({});
+  const [rescheduleLoading, setRescheduleLoading] = useState<Record<string, boolean>>({});
+  const [rescheduleResults, setRescheduleResults] = useState<Record<string, { ok: boolean; message: string; result?: RescheduleReplyResult }>>({});
 
   useEffect(() => {
     async function load() {
@@ -72,6 +84,84 @@ export default function ConversationLogsPage() {
   function handleClearAppointmentSandboxEvents() {
     clearSandboxConversationEvents();
     setAppointmentSandboxEvents([]);
+    setRescheduleReplies({});
+    setRescheduleLoading({});
+    setRescheduleResults({});
+  }
+
+  async function handleAnalyzeRescheduleReply(event: SandboxConversationEvent) {
+    const customerReply = (rescheduleReplies[event.id] || "").trim();
+    if (!customerReply) {
+      setRescheduleResults((prev) => ({ ...prev, [event.id]: { ok: false, message: "請先輸入模擬客人回覆。" } }));
+      return;
+    }
+
+    setRescheduleLoading((prev) => ({ ...prev, [event.id]: true }));
+    setRescheduleResults((prev) => ({ ...prev, [event.id]: { ok: false, message: "" } }));
+
+    try {
+      const analyzeResponse = await fetch("/api/sandbox/appointment-reschedule-reply", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          appointment_request_id: event.appointment_request_id,
+          previous_staff_reply: event.content,
+          customer_reply: customerReply,
+          owner_name: event.owner_name || null,
+          pet_name: event.pet_name || null,
+          service: event.service || null,
+        }),
+      });
+
+      const analyzePayload = (await analyzeResponse.json()) as { error?: string; result?: RescheduleReplyResult };
+      if (!analyzeResponse.ok || !analyzePayload.result) {
+        setRescheduleResults((prev) => ({
+          ...prev,
+          [event.id]: { ok: false, message: analyzePayload.error || "改約分析失敗，請稍後再試。" },
+        }));
+        return;
+      }
+
+      const result = analyzePayload.result;
+      if (!(result.success && result.requested_at_iso)) {
+        setRescheduleResults((prev) => ({
+          ...prev,
+          [event.id]: { ok: false, message: result.staff_note || "尚無法更新預約時間。", result },
+        }));
+        return;
+      }
+
+      if (!isSupabaseConfigured) {
+        setRescheduleResults((prev) => ({ ...prev, [event.id]: { ok: false, message: supabaseEnvWarning, result } }));
+        return;
+      }
+
+      await supabaseRequest({
+        table: "appointment_requests",
+        method: "PATCH",
+        query: `id=eq.${event.appointment_request_id}&is_sandbox=eq.true`,
+        body: {
+          requested_at: result.requested_at_iso,
+          status: "pending",
+        },
+      });
+
+      setRescheduleResults((prev) => ({
+        ...prev,
+        [event.id]: {
+          ok: true,
+          message: "已更新原本 Sandbox 預約時間，狀態已改回 pending。請到 Appointment Requests 做最後確認。",
+          result,
+        },
+      }));
+    } catch (updateError) {
+      setRescheduleResults((prev) => ({
+        ...prev,
+        [event.id]: { ok: false, message: `更新失敗：${(updateError as Error).message}` },
+      }));
+    } finally {
+      setRescheduleLoading((prev) => ({ ...prev, [event.id]: false }));
+    }
   }
 
   const extractedRows = useMemo(() => {
@@ -300,6 +390,45 @@ export default function ConversationLogsPage() {
                   {event.owner_name || "-"} / {event.pet_name || "-"} / {event.service || "-"}
                 </p>
                 <p className="mt-2 rounded-xl bg-cyan-100 px-3 py-2 text-cyan-950">{event.content}</p>
+                {event.appointment_status === "proposed_new_time" ? (
+                  <div className="mt-3 rounded-md border border-cyan-200 bg-cyan-50 p-3">
+                    <label className="block text-sm text-slate-700" htmlFor={`reschedule-reply-${event.id}`}>
+                      模擬客人回覆
+                      <textarea
+                        id={`reschedule-reply-${event.id}`}
+                        className="mt-1 w-full rounded border border-slate-300 px-3 py-2 text-sm"
+                        rows={3}
+                        placeholder="例如：好，明天下午三點可以"
+                        value={rescheduleReplies[event.id] || ""}
+                        onChange={(e) => setRescheduleReplies((prev) => ({ ...prev, [event.id]: e.target.value }))}
+                      />
+                    </label>
+                    <button
+                      type="button"
+                      onClick={() => handleAnalyzeRescheduleReply(event)}
+                      disabled={rescheduleLoading[event.id] === true}
+                      className="mt-2 rounded bg-cyan-800 px-4 py-2 text-sm font-medium text-white hover:bg-cyan-700 disabled:cursor-not-allowed disabled:bg-cyan-400"
+                    >
+                      {rescheduleLoading[event.id] ? "處理中..." : "分析並更新 Sandbox 預約時間"}
+                    </button>
+                    {rescheduleResults[event.id]?.message ? (
+                      <div
+                        className={`mt-2 rounded px-3 py-2 text-sm ${
+                          rescheduleResults[event.id].ok ? "bg-emerald-100 text-emerald-900" : "bg-amber-100 text-amber-900"
+                        }`}
+                      >
+                        <p>{rescheduleResults[event.id].message}</p>
+                        {rescheduleResults[event.id].result ? (
+                          <ul className="mt-1 list-disc pl-5">
+                            <li>preferred_date：{rescheduleResults[event.id].result?.preferred_date || "-"}</li>
+                            <li>preferred_time：{rescheduleResults[event.id].result?.preferred_time || "-"}</li>
+                            <li>staff_note：{rescheduleResults[event.id].result?.staff_note || "-"}</li>
+                          </ul>
+                        ) : null}
+                      </div>
+                    ) : null}
+                  </div>
+                ) : null}
               </div>
             ))}
           </div>
