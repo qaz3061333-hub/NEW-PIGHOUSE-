@@ -111,9 +111,9 @@ export default function ConversationLogsPage() {
       try {
         const data = await supabaseRequest<AppointmentRequest[]>({
           table: "appointment_requests",
-          query: "select=id,owner_name,pet_name,service,requested_at,status,is_sandbox&is_sandbox=eq.true&status=eq.confirmed&order=requested_at.desc",
+          query: "select=id,owner_name,pet_name,service,requested_at,status,is_sandbox&order=requested_at.desc",
         });
-        setConfirmedSandboxRequests(data);
+        setConfirmedSandboxRequests(data.filter((item) => item.is_sandbox === true && item.status === "confirmed"));
       } catch {
         setConfirmedSandboxRequests([]);
       }
@@ -143,8 +143,14 @@ export default function ConversationLogsPage() {
       const result = payload.result ? payload.result as CustomerRescheduleApiResult : payload as CustomerRescheduleApiResult;
       if (!resp.ok) throw new Error(payload.error || '分析失敗');
       if (!(result.success && result.requested_at_iso)) { setCustomerRescheduleFeedback({ ok:false, message: result.staff_note || '尚無法更新。', result}); return; }
-      await supabaseRequest({ table:'appointment_requests', method:'PATCH', query:`id=eq.${selected.id}&is_sandbox=eq.true`, body:{ requested_at: result.requested_at_iso, status:'pending' }});
+      const updated = await supabaseRequest<AppointmentRequest[]>({ table:'appointment_requests', method:'PATCH', query:`id=eq.${selected.id}&is_sandbox=eq.true&status=eq.confirmed`, body:{ requested_at: result.requested_at_iso, status:'pending' }, prefer: 'return=representation' });
+      if (!updated[0]) {
+        setCustomerRescheduleFeedback({ ok:false, message:'未找到可更新的 confirmed Sandbox 預約，可能狀態已變更，請重新整理後再試。', result });
+        return;
+      }
       appendSandboxCustomerRescheduleEvent({ id:`${selected.id}-${Date.now()}`, appointment_request_id:selected.id, source:'customer_reschedule_request', old_requested_at:selected.requested_at, new_requested_at:result.requested_at_iso, customer_message:message, staff_note:result.staff_note, created_at:new Date().toISOString() });
+      setConfirmedSandboxRequests((prev) => prev.filter((item) => item.id !== selected.id));
+      setSelectedConfirmedId('');
       setCustomerRescheduleFeedback({ ok:true, message:'已更新原本 Sandbox 預約時間，狀態已改回 pending。這是客人主動改約，不是新預約，請到 Appointment Requests 重新確認。', result});
       setCustomerRescheduleMessage('');
     } catch (e) { setCustomerRescheduleFeedback({ ok:false, message:`更新失敗：${e}` }); }
