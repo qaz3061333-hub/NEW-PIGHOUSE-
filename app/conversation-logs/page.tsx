@@ -8,6 +8,8 @@ import { EMPTY_ANALYZE_RESULT, SandboxAnalyzeResult } from "@/lib/sandbox";
 import { isSupabaseConfigured, supabaseEnvWarning, supabaseRequest } from "@/lib/supabaseClient";
 import { ConversationLog } from "@/lib/types";
 import { clearSandboxConversationEvents, listSandboxConversationEvents, SandboxConversationEvent } from "@/lib/sandboxConversationEvents";
+import { appendSandboxCustomerRescheduleEvent } from "@/lib/sandboxCustomerRescheduleEvents";
+import { AppointmentRequest } from "@/lib/types";
 
 type ChatMessage = {
   id: string;
@@ -30,6 +32,22 @@ const confidencePercent = (value: number) => `${Math.round(Math.max(0, Math.min(
 const DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 const TIME_PATTERN = /^([01]\d|2[0-3]):[0-5]\d$/;
 
+type CustomerRescheduleApiResult = {
+  success: boolean;
+  action: "request_reschedule" | "unclear" | "not_reschedule";
+  time_status: "valid" | "unclear" | "past";
+  preferred_date: string | null;
+  preferred_time: string | null;
+  requested_at_iso: string | null;
+  staff_note: string;
+};
+
+function formatTaipei(value: string) {
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return value;
+  return new Intl.DateTimeFormat("zh-TW", { timeZone: "Asia/Taipei", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hour12: false }).format(d);
+}
+
 function isStructuredDateTime(preferredDate: string, preferredTime: string) {
   return DATE_PATTERN.test(preferredDate.trim()) && TIME_PATTERN.test(preferredTime.trim());
 }
@@ -48,6 +66,11 @@ export default function ConversationLogsPage() {
   const [rescheduleReplies, setRescheduleReplies] = useState<Record<string, string>>({});
   const [rescheduleLoading, setRescheduleLoading] = useState<Record<string, boolean>>({});
   const [rescheduleResults, setRescheduleResults] = useState<Record<string, { ok: boolean; message: string; result?: RescheduleReplyResult }>>({});
+  const [confirmedSandboxRequests, setConfirmedSandboxRequests] = useState<AppointmentRequest[]>([]);
+  const [selectedConfirmedId, setSelectedConfirmedId] = useState("");
+  const [customerRescheduleMessage, setCustomerRescheduleMessage] = useState("");
+  const [customerRescheduleLoading, setCustomerRescheduleLoading] = useState(false);
+  const [customerRescheduleFeedback, setCustomerRescheduleFeedback] = useState<{ ok: boolean; message: string; result?: CustomerRescheduleApiResult } | null>(null);
 
   useEffect(() => {
     async function load() {
@@ -81,12 +104,51 @@ export default function ConversationLogsPage() {
     setAppointmentSandboxEvents(listSandboxConversationEvents().filter((event) => event.source === "appointment_requests"));
   }, []);
 
+
+  useEffect(() => {
+    async function loadConfirmedSandboxRequests() {
+      if (!isSupabaseConfigured) return;
+      try {
+        const data = await supabaseRequest<AppointmentRequest[]>({
+          table: "appointment_requests",
+          query: "select=id,owner_name,pet_name,service,requested_at,status,is_sandbox&is_sandbox=eq.true&status=eq.confirmed&order=requested_at.desc",
+        });
+        setConfirmedSandboxRequests(data);
+      } catch {
+        setConfirmedSandboxRequests([]);
+      }
+    }
+    loadConfirmedSandboxRequests();
+  }, []);
+
   function handleClearAppointmentSandboxEvents() {
     clearSandboxConversationEvents();
     setAppointmentSandboxEvents([]);
     setRescheduleReplies({});
     setRescheduleLoading({});
     setRescheduleResults({});
+  }
+
+
+  async function handleCustomerRescheduleRequest() {
+    const selected = confirmedSandboxRequests.find((item) => item.id === selectedConfirmedId);
+    if (!selected) { setCustomerRescheduleFeedback({ ok: false, message: "請先選擇一筆已 confirmed 的 Sandbox 預約。" }); return; }
+    const message = customerRescheduleMessage.trim();
+    if (!message) { setCustomerRescheduleFeedback({ ok: false, message: "請先輸入模擬客人改約訊息。" }); return; }
+    setCustomerRescheduleLoading(true);
+    setCustomerRescheduleFeedback(null);
+    try {
+      const resp = await fetch('/api/sandbox/customer-reschedule-request',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({appointment_request_id:selected.id,current_requested_at:selected.requested_at,customer_message:message,owner_name:selected.owner_name??null,pet_name:selected.pet_name??null,service:selected.service??null})});
+      const payload = await resp.json();
+      const result = payload.result ? payload.result as CustomerRescheduleApiResult : payload as CustomerRescheduleApiResult;
+      if (!resp.ok) throw new Error(payload.error || '分析失敗');
+      if (!(result.success && result.requested_at_iso)) { setCustomerRescheduleFeedback({ ok:false, message: result.staff_note || '尚無法更新。', result}); return; }
+      await supabaseRequest({ table:'appointment_requests', method:'PATCH', query:`id=eq.${selected.id}&is_sandbox=eq.true`, body:{ requested_at: result.requested_at_iso, status:'pending' }});
+      appendSandboxCustomerRescheduleEvent({ id:`${selected.id}-${Date.now()}`, appointment_request_id:selected.id, source:'customer_reschedule_request', old_requested_at:selected.requested_at, new_requested_at:result.requested_at_iso, customer_message:message, staff_note:result.staff_note, created_at:new Date().toISOString() });
+      setCustomerRescheduleFeedback({ ok:true, message:'已更新原本 Sandbox 預約時間，狀態已改回 pending。這是客人主動改約，不是新預約，請到 Appointment Requests 重新確認。', result});
+      setCustomerRescheduleMessage('');
+    } catch (e) { setCustomerRescheduleFeedback({ ok:false, message:`更新失敗：${e}` }); }
+    finally { setCustomerRescheduleLoading(false); }
   }
 
   async function handleAnalyzeRescheduleReply(event: SandboxConversationEvent) {
@@ -433,6 +495,63 @@ export default function ConversationLogsPage() {
             ))}
           </div>
         </div>
+
+        <section className="mt-5 rounded-lg border border-indigo-200 bg-indigo-50 p-4">
+          <h3 className="text-sm font-semibold text-indigo-900">客人主動改已確認預約（Sandbox）</h3>
+          <p className="mt-2 text-sm text-indigo-900">
+            這是 Sandbox 模擬流程，用來測試客人已預約後主動改時間。不會真的通知客人。
+          </p>
+          {confirmedSandboxRequests.length === 0 ? (
+            <p className="mt-3 text-sm text-slate-700">目前沒有可模擬改約的已確認 Sandbox 預約。</p>
+          ) : (
+            <>
+              <label className="mt-3 block text-sm font-medium text-indigo-900">選擇已確認 Sandbox 預約</label>
+              <select
+                className="mt-1 w-full rounded border border-indigo-300 bg-white px-2 py-1 text-sm"
+                value={selectedConfirmedId}
+                onChange={(event) => setSelectedConfirmedId(event.target.value)}
+              >
+                <option value="">請選擇</option>
+                {confirmedSandboxRequests.map((item) => (
+                  <option key={item.id} value={item.id}>
+                    {`${item.owner_name || "未知飼主"} / ${item.pet_name || "未知寵物"} / ${item.service} / ${formatTaipei(item.requested_at)} / ${item.id}`}
+                  </option>
+                ))}
+              </select>
+              <label className="mt-3 block text-sm font-medium text-indigo-900">模擬客人改約訊息</label>
+              <textarea
+                className="mt-1 min-h-20 w-full rounded border border-indigo-300 bg-white px-2 py-1 text-sm"
+                placeholder="例如：抱歉我這個時間突然有事，可以改五點嗎？"
+                value={customerRescheduleMessage}
+                onChange={(event) => setCustomerRescheduleMessage(event.target.value)}
+              />
+              <button
+                type="button"
+                className="mt-3 rounded border border-indigo-300 bg-white px-3 py-1 text-sm font-medium text-indigo-900 disabled:opacity-50"
+                disabled={customerRescheduleLoading}
+                onClick={handleCustomerRescheduleRequest}
+              >
+                {customerRescheduleLoading ? "處理中…" : "分析並送出改約請求"}
+              </button>
+            </>
+          )}
+          {customerRescheduleFeedback ? (
+            <div
+              className={`mt-3 rounded border px-3 py-2 text-sm ${
+                customerRescheduleFeedback.ok ? "border-emerald-200 bg-emerald-50 text-emerald-900" : "border-rose-200 bg-rose-50 text-rose-900"
+              }`}
+            >
+              <p>{customerRescheduleFeedback.message}</p>
+              {customerRescheduleFeedback.result ? (
+                <ul className="mt-1 list-disc pl-5">
+                  <li>preferred_date：{customerRescheduleFeedback.result.preferred_date || "-"}</li>
+                  <li>preferred_time：{customerRescheduleFeedback.result.preferred_time || "-"}</li>
+                  <li>staff_note：{customerRescheduleFeedback.result.staff_note || "-"}</li>
+                </ul>
+              ) : null}
+            </div>
+          ) : null}
+        </section>
 
         {analysisResult ? (
           <div className="mt-5 rounded-lg border border-indigo-200 bg-indigo-50 p-4 text-sm text-slate-800">

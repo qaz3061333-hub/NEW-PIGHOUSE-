@@ -7,6 +7,7 @@ import { appointmentRequests as mockAppointmentRequests } from "@/lib/mockData";
 import { isSupabaseConfigured, supabaseEnvWarning, supabaseRequest } from "@/lib/supabaseClient";
 import { AppointmentRequest, AppointmentStatus } from "@/lib/types";
 import { appendSandboxConversationEvent } from "@/lib/sandboxConversationEvents";
+import { listSandboxCustomerRescheduleEvents, SandboxCustomerRescheduleEvent } from "@/lib/sandboxCustomerRescheduleEvents";
 
 const statusOptions: AppointmentStatus[] = ["pending", "confirmed", "proposed_new_time", "rejected"];
 
@@ -106,8 +107,11 @@ export default function AppointmentRequestsPage() {
   const [sandboxRejectedResults, setSandboxRejectedResults] = useState<Record<string, SandboxRejectedReplyResult | null>>({});
   const [sandboxRejectedConfirmations, setSandboxRejectedConfirmations] = useState<Record<string, boolean>>({});
   const [sandboxConversationWritebacks, setSandboxConversationWritebacks] = useState<Record<string, boolean>>({});
+  const [customerRescheduleEvents, setCustomerRescheduleEvents] = useState<Record<string, SandboxCustomerRescheduleEvent>>({});
 
   useEffect(() => {
+    setCustomerRescheduleEvents(Object.fromEntries(listSandboxCustomerRescheduleEvents().map((item) => [item.appointment_request_id, item])));
+
     async function load() {
       if (!isSupabaseConfigured) return;
       try {
@@ -330,6 +334,7 @@ export default function AppointmentRequestsPage() {
         {requests.map((request) => {
           const isSandbox = request.is_sandbox ?? false;
           const isExpanded = expandedId === request.id;
+          const customerRescheduleEvent = customerRescheduleEvents[request.id];
           return (
             <Fragment key={request.id}>
               <tr className={isSandbox ? "bg-amber-50/60" : undefined}>
@@ -429,6 +434,20 @@ export default function AppointmentRequestsPage() {
                   </td>
                 </tr>
               ) : null}
+
+              {isSandbox && customerRescheduleEvent ? (
+                <tr className="bg-amber-50">
+                  <td className="px-4 py-3" colSpan={8}>
+                    <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+                      <p className="font-semibold">客人主動要求改約，不是新預約。</p>
+                      <p>原預約時間：{customerRescheduleEvent.old_requested_at}</p>
+                      <p>客人要求新時間：{customerRescheduleEvent.new_requested_at}</p>
+                      <p>狀態已改回 pending，請員工重新確認。</p>
+                    </div>
+                  </td>
+                </tr>
+              ) : null}
+
               {isSandbox && request.status === "confirmed" ? (
                 <tr className="bg-emerald-50/50">
                   <td className="px-4 py-3" colSpan={8}>
