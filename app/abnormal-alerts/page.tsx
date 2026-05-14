@@ -7,11 +7,13 @@ import { abnormalAlerts as mockAbnormalAlerts } from "@/lib/mockData";
 import { isSupabaseConfigured, supabaseEnvWarning, supabaseRequest } from "@/lib/supabaseClient";
 import { AbnormalAlert } from "@/lib/types";
 import { clearSandboxAbnormalAlertEvents, listSandboxAbnormalAlertEvents, markSandboxAbnormalAlertEventResolved, SandboxAbnormalAlertEvent } from "@/lib/sandboxAbnormalAlertEvents";
+import { appendSandboxAbnormalAlertResolutionEvent } from "@/lib/sandboxAbnormalAlertResolutionEvents";
 
 export default function AbnormalAlertsPage() {
   const [alerts, setAlerts] = useState<AbnormalAlert[]>(mockAbnormalAlerts);
   const [notice, setNotice] = useState<string>(isSupabaseConfigured ? "" : supabaseEnvWarning);
   const [sandboxAlerts, setSandboxAlerts] = useState<SandboxAbnormalAlertEvent[]>([]);
+  const [resolutionNotes, setResolutionNotes] = useState<Record<string, string>>({});
 
   useEffect(() => {
     setSandboxAlerts(listSandboxAbnormalAlertEvents());
@@ -63,8 +65,21 @@ export default function AbnormalAlertsPage() {
 
 
 
-  function markSandboxResolved(id: string) {
-    setSandboxAlerts(markSandboxAbnormalAlertEventResolved(id));
+  function markSandboxResolved(alert: SandboxAbnormalAlertEvent) {
+    const note = (resolutionNotes[alert.id] || "").trim() || "已標記為沙盒處理完成。";
+    setSandboxAlerts(markSandboxAbnormalAlertEventResolved(alert.id));
+    appendSandboxAbnormalAlertResolutionEvent({
+      id: `sandbox-alert-resolution-${Date.now()}` ,
+      source: "abnormal_alerts",
+      abnormal_alert_id: alert.id,
+      title: alert.title,
+      severity: alert.severity,
+      summary: alert.summary,
+      customer_message: alert.customer_message,
+      resolution_note: note,
+      created_at: new Date().toISOString(),
+    });
+    setResolutionNotes((prev) => ({ ...prev, [alert.id]: note }));
   }
 
   function clearSandboxAlerts() {
@@ -97,10 +112,22 @@ export default function AbnormalAlertsPage() {
                 <p><span className="font-medium">標題：</span>{alert.title}</p>
                 <p><span className="font-medium">摘要：</span>{alert.summary}</p>
                 <p><span className="font-medium">原始客人訊息：</span>{alert.customer_message}</p>
+                {alert.is_resolved ? null : (
+                  <label className="mt-2 block">
+                    <span className="text-xs text-slate-600">處理備註</span>
+                    <input
+                      type="text"
+                      placeholder="例如：已聯繫客人，請對方觀察皮膚狀況，必要時回店檢查。"
+                      value={resolutionNotes[alert.id] || ""}
+                      onChange={(event) => setResolutionNotes((prev) => ({ ...prev, [alert.id]: event.target.value }))}
+                      className="mt-1 w-full rounded border border-slate-300 px-2 py-1 text-xs"
+                    />
+                  </label>
+                )}
                 {alert.is_resolved ? (
                   <span className="mt-2 inline-block rounded-full bg-emerald-50 px-2 py-1 text-xs text-emerald-700">已處理</span>
                 ) : (
-                  <button type="button" onClick={() => markSandboxResolved(alert.id)} className="mt-2 rounded border border-slate-300 px-2 py-1 text-xs">
+                  <button type="button" onClick={() => markSandboxResolved(alert)} className="mt-2 rounded border border-slate-300 px-2 py-1 text-xs">
                     標記沙盒已處理
                   </button>
                 )}
