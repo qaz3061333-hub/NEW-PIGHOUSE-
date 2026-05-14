@@ -10,6 +10,8 @@ import { ConversationLog } from "@/lib/types";
 import { clearSandboxConversationEvents, listSandboxConversationEvents, SandboxConversationEvent } from "@/lib/sandboxConversationEvents";
 import { appendSandboxCustomerRescheduleEvent } from "@/lib/sandboxCustomerRescheduleEvents";
 import { appendSandboxAbnormalAlertEvent } from "@/lib/sandboxAbnormalAlertEvents";
+import { clearSandboxAbnormalAlertResolutionEvents, listSandboxAbnormalAlertResolutionEvents, SandboxAbnormalAlertResolutionEvent } from "@/lib/sandboxAbnormalAlertResolutionEvents";
+import { normalizeSandboxAlertSeverity } from "@/lib/sandboxAlertSeverity";
 import { AppointmentRequest } from "@/lib/types";
 
 type ChatMessage = {
@@ -73,6 +75,7 @@ export default function ConversationLogsPage() {
   const [customerRescheduleMessage, setCustomerRescheduleMessage] = useState("");
   const [customerRescheduleLoading, setCustomerRescheduleLoading] = useState(false);
   const [customerRescheduleFeedback, setCustomerRescheduleFeedback] = useState<{ ok: boolean; message: string; result?: CustomerRescheduleApiResult } | null>(null);
+  const [abnormalResolutionEvents, setAbnormalResolutionEvents] = useState<SandboxAbnormalAlertResolutionEvent[]>([]);
 
   useEffect(() => {
     async function load() {
@@ -104,6 +107,7 @@ export default function ConversationLogsPage() {
 
   useEffect(() => {
     setAppointmentSandboxEvents(listSandboxConversationEvents().filter((event) => event.source === "appointment_requests"));
+    setAbnormalResolutionEvents(listSandboxAbnormalAlertResolutionEvents());
   }, []);
 
 
@@ -131,6 +135,11 @@ export default function ConversationLogsPage() {
     setRescheduleResults({});
   }
 
+
+  function handleClearAbnormalResolutionEvents() {
+    clearSandboxAbnormalAlertResolutionEvents();
+    setAbnormalResolutionEvents([]);
+  }
 
   async function handleCustomerRescheduleRequest() {
     const selected = confirmedSandboxRequests.find((item) => item.id === selectedConfirmedId);
@@ -326,7 +335,7 @@ export default function ConversationLogsPage() {
     if (!analysisResult || analysisResult.intent !== "abnormal_alert") return;
 
     const extracted = analysisResult.extracted;
-    const severity = extracted.urgency === "high" ? "high" : extracted.urgency === "medium" ? "medium" : "low";
+    const severity = normalizeSandboxAlertSeverity(extracted.urgency);
     appendSandboxAbnormalAlertEvent({
       id: `sandbox-alert-${Date.now()}`,
       source: "conversation_logs",
@@ -339,6 +348,7 @@ export default function ConversationLogsPage() {
     });
 
     setSandboxAbnormalAlertMessage("已建立沙盒異常提醒，請到 Abnormal Alerts 查看。");
+    setAbnormalResolutionEvents(listSandboxAbnormalAlertResolutionEvents());
   }
 
   async function createSandboxAppointmentRequest() {
@@ -523,6 +533,34 @@ export default function ConversationLogsPage() {
                     ) : null}
                   </div>
                 ) : null}
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <div className="mt-5 rounded-lg border border-amber-200 bg-amber-50 p-4">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <h3 className="text-sm font-semibold text-amber-900">Abnormal Alerts 沙盒處理回寫訊息</h3>
+            <button
+              type="button"
+              onClick={handleClearAbnormalResolutionEvents}
+              className="rounded border border-amber-300 bg-white px-3 py-1 text-sm font-medium text-amber-900 hover:bg-amber-100"
+            >
+              清除 Abnormal Alerts 沙盒處理回寫
+            </button>
+          </div>
+          <p className="mt-2 text-sm text-amber-900">
+            這些是 Abnormal Alerts 回寫的 Sandbox 訊息，不會真的送 LINE，也不是正式 messages 資料。
+          </p>
+          <div className="mt-3 space-y-2">
+            {abnormalResolutionEvents.length === 0 ? <p className="text-sm text-slate-500">目前沒有回寫訊息。</p> : null}
+            {abnormalResolutionEvents.map((event) => (
+              <div key={event.id} className="rounded-lg border border-amber-200 bg-white p-3 text-sm text-slate-800">
+                <p className="text-xs text-slate-500">{event.created_at}</p>
+                <p className="mt-1"><span className="font-medium">標題：</span>{event.title}</p>
+                <p><span className="font-medium">嚴重度：</span>{event.severity}</p>
+                <p><span className="font-medium">原始摘要：</span>{event.summary}</p>
+                <p><span className="font-medium">處理備註：</span>{event.resolution_note}</p>
               </div>
             ))}
           </div>
