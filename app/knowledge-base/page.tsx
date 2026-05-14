@@ -13,6 +13,13 @@ import {
   updateKnowledgeArticle,
 } from "@/lib/supabaseClient";
 import { KbArticle } from "@/lib/types";
+import {
+  clearSandboxKnowledgeGapEvents,
+  listSandboxKnowledgeGapEvents,
+  markSandboxKnowledgeGapEventAdded,
+  markSandboxKnowledgeGapEventIgnored,
+  SandboxKnowledgeGapEvent,
+} from "@/lib/sandboxKnowledgeGapEvents";
 
 const initialForm = { title: "", category: "", content: "" };
 
@@ -21,6 +28,7 @@ export default function KnowledgeBasePage() {
   const [form, setForm] = useState(initialForm);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [notice, setNotice] = useState<string>(isSupabaseConfigured ? "" : supabaseEnvWarning);
+  const [gapEvents, setGapEvents] = useState<SandboxKnowledgeGapEvent[]>([]);
 
   useEffect(() => {
     async function loadArticles() {
@@ -36,6 +44,9 @@ export default function KnowledgeBasePage() {
     }
 
     loadArticles();
+  }, []);
+  useEffect(() => {
+    setGapEvents(listSandboxKnowledgeGapEvents());
   }, []);
 
   const submitLabel = useMemo(() => (editingId ? "更新知識" : "新增知識"), [editingId]);
@@ -125,9 +136,40 @@ export default function KnowledgeBasePage() {
     }
   }
 
+  function refreshGapEvents() {
+    setGapEvents(listSandboxKnowledgeGapEvents());
+  }
+
   return (
     <PageShell title="Knowledge Base 知識庫管理" description="管理客服可引用的標準回覆與作業 SOP。">
       {notice ? <p className="mb-3 rounded-md bg-amber-50 px-3 py-2 text-sm text-amber-800">{notice}</p> : null}
+      <section className="mb-4 rounded-lg border border-emerald-200 bg-emerald-50 p-3">
+        <div className="flex items-center justify-between">
+          <h3 className="text-sm font-semibold text-emerald-900">Sandbox 知識庫補充建議</h3>
+          <button className="rounded border border-emerald-300 bg-white px-2 py-1 text-xs" type="button" onClick={() => { clearSandboxKnowledgeGapEvents(); refreshGapEvents(); }}>
+            清除全部補充建議
+          </button>
+        </div>
+        <div className="mt-2 space-y-2">
+          {gapEvents.length === 0 ? <p className="text-sm text-slate-600">目前沒有補充建議。</p> : null}
+          {gapEvents.map((event) => (
+            <div key={event.id} className="rounded border border-emerald-200 bg-white p-3 text-sm">
+              <p><span className="font-medium">建議標題：</span>{event.suggested_title}</p>
+              <p><span className="font-medium">建議分類：</span>{event.suggested_category}</p>
+              <p><span className="font-medium">代表問題：</span>{event.representative_message}</p>
+              <p><span className="font-medium">出現次數：</span>{event.count}</p>
+              <p><span className="font-medium">最後出現：</span>{event.last_seen_at}</p>
+              <p><span className="font-medium">reason：</span>{event.reason}</p>
+              <p><span className="font-medium">status：</span>{event.status}</p>
+              <div className="mt-2 flex flex-wrap gap-2">
+                <button type="button" className="rounded border px-2 py-1 text-xs" onClick={() => setForm({ title: event.suggested_title, category: event.suggested_category, content: `請補充此問題的標準回覆：${event.representative_message}` })}>複製為新增知識草稿</button>
+                <button type="button" className="rounded border px-2 py-1 text-xs" onClick={() => { markSandboxKnowledgeGapEventAdded(event.id); refreshGapEvents(); }}>標記已補充</button>
+                <button type="button" className="rounded border px-2 py-1 text-xs" onClick={() => { markSandboxKnowledgeGapEventIgnored(event.id); refreshGapEvents(); }}>忽略</button>
+              </div>
+            </div>
+          ))}
+        </div>
+      </section>
 
       <form className="mb-4 grid gap-2 rounded-lg border border-slate-200 bg-white p-3 md:grid-cols-4" onSubmit={handleSubmit}>
         <input
