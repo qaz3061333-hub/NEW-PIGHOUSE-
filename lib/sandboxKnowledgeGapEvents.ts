@@ -13,7 +13,10 @@ export type SandboxKnowledgeGapEvent = {
 
 const STORAGE_KEY = "new_pighouse_sandbox_knowledge_gap_events_v1";
 
-type KnowledgeGapInput = Omit<SandboxKnowledgeGapEvent, "id" | "count" | "first_seen_at" | "last_seen_at" | "status"> & { normalized_question?: string };
+type KnowledgeGapInput = Omit<
+  SandboxKnowledgeGapEvent,
+  "id" | "normalized_question" | "count" | "first_seen_at" | "last_seen_at" | "status"
+> & { normalized_question?: string };
 
 export function normalizeKnowledgeGapQuestion(message: string) {
   return message
