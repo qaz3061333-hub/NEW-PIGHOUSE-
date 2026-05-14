@@ -11,6 +11,8 @@ import { clearSandboxConversationEvents, listSandboxConversationEvents, SandboxC
 import { appendSandboxCustomerRescheduleEvent } from "@/lib/sandboxCustomerRescheduleEvents";
 import { appendSandboxAbnormalAlertEvent } from "@/lib/sandboxAbnormalAlertEvents";
 import { clearSandboxAbnormalAlertResolutionEvents, listSandboxAbnormalAlertResolutionEvents, SandboxAbnormalAlertResolutionEvent } from "@/lib/sandboxAbnormalAlertResolutionEvents";
+import { appendSandboxManualReplyTaskEvent } from "@/lib/sandboxManualReplyTaskEvents";
+import { clearSandboxManualReplyResolutionEvents, listSandboxManualReplyResolutionEvents, SandboxManualReplyResolutionEvent } from "@/lib/sandboxManualReplyResolutionEvents";
 import { normalizeSandboxAlertSeverity } from "@/lib/sandboxAlertSeverity";
 import { AppointmentRequest } from "@/lib/types";
 
@@ -76,6 +78,8 @@ export default function ConversationLogsPage() {
   const [customerRescheduleLoading, setCustomerRescheduleLoading] = useState(false);
   const [customerRescheduleFeedback, setCustomerRescheduleFeedback] = useState<{ ok: boolean; message: string; result?: CustomerRescheduleApiResult } | null>(null);
   const [abnormalResolutionEvents, setAbnormalResolutionEvents] = useState<SandboxAbnormalAlertResolutionEvent[]>([]);
+  const [manualReplyTaskMessage, setManualReplyTaskMessage] = useState("");
+  const [manualReplyResolutionEvents, setManualReplyResolutionEvents] = useState<SandboxManualReplyResolutionEvent[]>([]);
 
   useEffect(() => {
     async function load() {
@@ -108,6 +112,7 @@ export default function ConversationLogsPage() {
   useEffect(() => {
     setAppointmentSandboxEvents(listSandboxConversationEvents().filter((event) => event.source === "appointment_requests"));
     setAbnormalResolutionEvents(listSandboxAbnormalAlertResolutionEvents());
+    setManualReplyResolutionEvents(listSandboxManualReplyResolutionEvents());
   }, []);
 
 
@@ -139,6 +144,11 @@ export default function ConversationLogsPage() {
   function handleClearAbnormalResolutionEvents() {
     clearSandboxAbnormalAlertResolutionEvents();
     setAbnormalResolutionEvents([]);
+  }
+
+  function handleClearManualReplyResolutionEvents() {
+    clearSandboxManualReplyResolutionEvents();
+    setManualReplyResolutionEvents([]);
   }
 
   async function handleCustomerRescheduleRequest() {
@@ -285,6 +295,7 @@ export default function ConversationLogsPage() {
     setAnalysisResult(null);
     setSandboxRequestMessage("");
     setSandboxAbnormalAlertMessage("");
+    setManualReplyTaskMessage("");
 
     const customerMessage: ChatMessage = {
       id: `${Date.now()}-customer`,
@@ -326,7 +337,30 @@ export default function ConversationLogsPage() {
     setAnalysisResult(null);
     setSandboxRequestMessage("");
     setSandboxAbnormalAlertMessage("");
+    setManualReplyTaskMessage("");
     setError("");
+  }
+
+  function createSandboxManualReplyTask() {
+    if (!analysisResult || analysisResult.intent !== "manual_reply_task") return;
+    const urgency = analysisResult.extracted.urgency?.toLowerCase() || "";
+    const isUrgent = ["high", "urgent", "緊急", "高"].some((item) => urgency.includes(item));
+    const lastMessage = inputMessage.trim() || chat.filter((item) => item.role === "customer").at(-1)?.content || "";
+    appendSandboxManualReplyTaskEvent({
+      id: `sandbox-manual-reply-${Date.now()}`,
+      source: "conversation_logs",
+      customer: analysisResult.extracted.customer_name?.trim() || "Sandbox Customer",
+      source_channel: "LINE Sandbox",
+      topic: analysisResult.summary?.trim() || "Sandbox 人工回覆任務",
+      last_message: lastMessage,
+      reply_note: analysisResult.customer_reply?.trim() || analysisResult.summary?.trim() || "請人工判斷並回覆客人。",
+      waiting_minutes: 0,
+      priority: isUrgent ? "urgent" : "normal",
+      created_at: new Date().toISOString(),
+      is_replied: false,
+      replied_at: null,
+    });
+    setManualReplyTaskMessage("已建立沙盒人工回覆任務，請到 Manual Reply Tasks 查看。");
   }
 
 
@@ -466,6 +500,26 @@ export default function ConversationLogsPage() {
                 >
                   {message.content}
                 </div>
+              </div>
+            ))}
+          </div>
+        </div>
+        <div className="mt-5 rounded-lg border border-fuchsia-200 bg-fuchsia-50 p-4">
+          <div className="flex items-center justify-between gap-2">
+            <h3 className="text-sm font-semibold text-fuchsia-900">Manual Reply Tasks 沙盒處理回寫訊息</h3>
+            <button className="rounded border border-fuchsia-300 px-2 py-1 text-xs text-fuchsia-900" onClick={handleClearManualReplyResolutionEvents} type="button">清除 Manual Reply Tasks 沙盒處理回寫</button>
+          </div>
+          <p className="mt-2 text-sm text-fuchsia-900">這些是 Manual Reply Tasks 回寫的 Sandbox 訊息，不會真的送 LINE，也不是正式 messages 資料。</p>
+          <div className="mt-3 space-y-2 text-sm">
+            {manualReplyResolutionEvents.length === 0 ? <p className="text-sm text-slate-500">目前沒有回寫訊息。</p> : null}
+            {manualReplyResolutionEvents.map((event) => (
+              <div key={event.id} className="rounded border border-fuchsia-200 bg-white p-3 text-slate-800">
+                <p className="text-xs text-slate-500">{event.created_at}</p>
+                <p className="mt-1"><span className="font-medium">客戶：</span>{event.customer}</p>
+                <p><span className="font-medium">主題：</span>{event.topic}</p>
+                <p><span className="font-medium">最後訊息：</span>{event.last_message}</p>
+                <p><span className="font-medium">建議回覆重點：</span>{event.reply_note}</p>
+                <p><span className="font-medium">處理備註：</span>{event.resolution_note}</p>
               </div>
             ))}
           </div>
@@ -685,6 +739,23 @@ export default function ConversationLogsPage() {
                   {isCreatingSandboxRequest ? "建立中..." : "建立沙盒預約申請"}
                 </button>
                 {sandboxRequestMessage ? <p className="mt-2 text-sm text-slate-700">{sandboxRequestMessage}</p> : null}
+              </div>
+            ) : null}
+            {analysisResult.intent === "manual_reply_task" ? (
+              <div className="mt-3 rounded-md border border-fuchsia-300 bg-fuchsia-50 p-3">
+                <p className="text-sm font-semibold text-fuchsia-900">Sandbox 人工回覆任務（僅 localStorage）</p>
+                <p className="mt-1 text-sm text-fuchsia-900">這是 Sandbox 人工回覆任務，不會通知客人，不會送 LINE，不會寫入正式 messages。</p>
+                <ul className="mt-2 list-disc pl-5 text-sm text-slate-800">
+                  <li>summary：{analysisResult.summary || "-"}</li>
+                  <li>issue：{analysisResult.extracted.issue || "-"}</li>
+                  <li>urgency：{analysisResult.extracted.urgency || "-"}</li>
+                  <li>customer_reply：{analysisResult.customer_reply || "-"}</li>
+                  <li>原始客人訊息：{inputMessage.trim() || chat.filter((item) => item.role === "customer").at(-1)?.content || "-"}</li>
+                </ul>
+                <button type="button" onClick={createSandboxManualReplyTask} className="mt-3 rounded bg-fuchsia-700 px-4 py-2 text-sm font-medium text-white hover:bg-fuchsia-600">
+                  建立沙盒人工回覆任務
+                </button>
+                {manualReplyTaskMessage ? <p className="mt-2 text-sm text-slate-700">{manualReplyTaskMessage}</p> : null}
               </div>
             ) : null}
           </div>
