@@ -1,0 +1,162 @@
+import { NextResponse } from "next/server";
+import { createClient } from "@supabase/supabase-js";
+
+type KnowledgeAnswerRequest = {
+  message?: string;
+  analysisResult?: {
+    summary?: string;
+    extracted?: {
+      issue?: string;
+      service_item?: string;
+    };
+  };
+};
+
+type KnowledgeArticle = {
+  id: string;
+  title: string;
+  category: string;
+  content: string;
+  is_active: boolean;
+};
+
+const GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/models";
+const MAX_MATCHED_ARTICLES = 3;
+const CONTENT_SNIPPET_LIMIT = 600;
+
+function compactText(value: string) {
+  return value.trim().replace(/\s+/g, " ");
+}
+
+function buildTerms(parts: string[]): string[] {
+  const terms = new Set<string>();
+  for (const part of parts) {
+    const normalized = compactText(part);
+    if (!normalized) continue;
+
+    for (const token of normalized.split(/[\s,，。！？!?.、；;：:\-_/()（）\[\]{}]+/)) {
+      const word = token.trim().toLowerCase();
+      if (word.length >= 2) terms.add(word);
+    }
+
+    const plain = normalized.replace(/\s+/g, "").toLowerCase();
+    for (let i = 0; i < plain.length - 1; i += 1) {
+      const gram = plain.slice(i, i + 2);
+      if (gram.length === 2) terms.add(gram);
+    }
+  }
+  return Array.from(terms);
+}
+
+function scoreArticle(article: KnowledgeArticle, terms: string[]): number {
+  const haystack = `${article.title} ${article.category} ${article.content}`.toLowerCase();
+  return terms.reduce((acc, term) => (haystack.includes(term) ? acc + 1 : acc), 0);
+}
+
+function extractGeminiText(payload: unknown): string {
+  const root = payload as { candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }> };
+  const text = root?.candidates?.[0]?.content?.parts?.[0]?.text;
+  return typeof text === "string" ? text.trim() : "";
+}
+
+export async function POST(request: Request) {
+  try {
+    const { message, analysisResult } = (await request.json()) as KnowledgeAnswerRequest;
+    const queryMessage = compactText(message || "");
+
+    if (!queryMessage) {
+      return NextResponse.json({ error: "message 不可為空" }, { status: 400 });
+    }
+
+    const apiKey = process.env.GEMINI_API_KEY;
+    if (!apiKey) {
+      return NextResponse.json({ error: "Gemini API Key 尚未設定" }, { status: 500 });
+    }
+
+    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL?.trim();
+    const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY?.trim();
+    if (!supabaseUrl || !supabaseAnonKey) {
+      return NextResponse.json({ error: "Supabase 環境變數未設定" }, { status: 500 });
+    }
+
+    const supabase = createClient(supabaseUrl, supabaseAnonKey, {
+      auth: { autoRefreshToken: false, persistSession: false },
+    });
+
+    const { data, error } = await supabase
+      .from("knowledge_articles")
+      .select("id,title,category,content,is_active")
+      .eq("is_active", true)
+      .order("updated_at", { ascending: false });
+
+    if (error) {
+      return NextResponse.json({ error: `查詢知識庫失敗：${error.message}` }, { status: 500 });
+    }
+
+    const articles = (data ?? []) as KnowledgeArticle[];
+    const terms = buildTerms([
+      queryMessage,
+      analysisResult?.summary || "",
+      analysisResult?.extracted?.issue || "",
+      analysisResult?.extracted?.service_item || "",
+    ]);
+
+    const matched = articles
+      .map((article) => ({ article, score: scoreArticle(article, terms) }))
+      .filter((item) => item.score > 0)
+      .sort((a, b) => b.score - a.score)
+      .slice(0, MAX_MATCHED_ARTICLES);
+
+    if (matched.length === 0) {
+      return NextResponse.json({
+        answer: "目前知識庫沒有找到足夠資料，建議交由人工確認",
+        matched_articles: [],
+        needs_manual_reply: true,
+      });
+    }
+
+    const context = matched
+      .map(({ article }, idx) => {
+        const clipped = compactText(article.content || "").slice(0, CONTENT_SNIPPET_LIMIT);
+        return `資料 ${idx + 1}\n標題：${article.title}\n分類：${article.category}\n內容：${clipped}`;
+      })
+      .join("\n\n");
+
+    const model = process.env.GEMINI_MODEL || "gemini-2.0-flash";
+    const prompt = `你是寵物門市客服助理。\n請只根據下列知識庫資料回答客人，使用繁體中文、語氣友善、內容精簡。\n若資料不足或無法確認，請明確說「需要人工確認」，禁止編造。\n\n客人問題：${queryMessage}\n\n可用知識庫資料：\n${context}`;
+
+    const response = await fetch(`${GEMINI_BASE_URL}/${model}:generateContent?key=${apiKey}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        generationConfig: { temperature: 0.1 },
+        contents: [{ role: "user", parts: [{ text: prompt }] }],
+      }),
+    });
+
+    if (!response.ok) {
+      const body = await response.text();
+      return NextResponse.json({ error: `Gemini 呼叫失敗（model: ${model}）：${body || response.statusText}` }, { status: 502 });
+    }
+
+    const raw = await response.json();
+    const answer = extractGeminiText(raw);
+
+    if (!answer) {
+      return NextResponse.json({ error: `Gemini 未回傳可解析內容（model: ${model}）` }, { status: 502 });
+    }
+
+    return NextResponse.json({
+      answer,
+      matched_articles: matched.map(({ article, score }) => ({
+        id: article.id,
+        title: article.title,
+        category: article.category,
+        score,
+      })),
+      needs_manual_reply: answer.includes("需要人工確認"),
+    });
+  } catch (error) {
+    return NextResponse.json({ error: `知識庫沙盒查詢失敗：${(error as Error).message}` }, { status: 500 });
+  }
+}
