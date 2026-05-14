@@ -9,6 +9,7 @@ import { isSupabaseConfigured, supabaseEnvWarning, supabaseRequest } from "@/lib
 import { ConversationLog } from "@/lib/types";
 import { clearSandboxConversationEvents, listSandboxConversationEvents, SandboxConversationEvent } from "@/lib/sandboxConversationEvents";
 import { appendSandboxCustomerRescheduleEvent } from "@/lib/sandboxCustomerRescheduleEvents";
+import { appendSandboxAbnormalAlertEvent } from "@/lib/sandboxAbnormalAlertEvents";
 import { AppointmentRequest } from "@/lib/types";
 
 type ChatMessage = {
@@ -62,6 +63,7 @@ export default function ConversationLogsPage() {
   const [analysisResult, setAnalysisResult] = useState<SandboxAnalyzeResult | null>(null);
   const [chat, setChat] = useState<ChatMessage[]>([]);
   const [sandboxRequestMessage, setSandboxRequestMessage] = useState("");
+  const [sandboxAbnormalAlertMessage, setSandboxAbnormalAlertMessage] = useState("");
   const [appointmentSandboxEvents, setAppointmentSandboxEvents] = useState<SandboxConversationEvent[]>([]);
   const [rescheduleReplies, setRescheduleReplies] = useState<Record<string, string>>({});
   const [rescheduleLoading, setRescheduleLoading] = useState<Record<string, boolean>>({});
@@ -273,6 +275,7 @@ export default function ConversationLogsPage() {
     setError("");
     setAnalysisResult(null);
     setSandboxRequestMessage("");
+    setSandboxAbnormalAlertMessage("");
 
     const customerMessage: ChatMessage = {
       id: `${Date.now()}-customer`,
@@ -313,7 +316,29 @@ export default function ConversationLogsPage() {
     setChat([]);
     setAnalysisResult(null);
     setSandboxRequestMessage("");
+    setSandboxAbnormalAlertMessage("");
     setError("");
+  }
+
+
+
+  function createSandboxAbnormalAlert() {
+    if (!analysisResult || analysisResult.intent !== "abnormal_alert") return;
+
+    const extracted = analysisResult.extracted;
+    const severity = extracted.urgency === "high" ? "high" : extracted.urgency === "medium" ? "medium" : "low";
+    appendSandboxAbnormalAlertEvent({
+      id: `sandbox-alert-${Date.now()}`,
+      source: "conversation_logs",
+      severity,
+      title: extracted.issue?.trim() || "Sandbox 異常提醒",
+      summary: analysisResult.summary,
+      customer_message: inputMessage.trim() || chat.filter((item) => item.role === "customer").at(-1)?.content || "",
+      created_at: new Date().toISOString(),
+      is_resolved: false,
+    });
+
+    setSandboxAbnormalAlertMessage("已建立沙盒異常提醒，請到 Abnormal Alerts 查看。");
   }
 
   async function createSandboxAppointmentRequest() {
@@ -325,6 +350,7 @@ export default function ConversationLogsPage() {
 
     setIsCreatingSandboxRequest(true);
     setSandboxRequestMessage("");
+    setSandboxAbnormalAlertMessage("");
 
     const extracted = analysisResult.extracted;
     const requestedAt = resolveSandboxRequestedAt(extracted.preferred_date, extracted.preferred_time);
@@ -582,6 +608,30 @@ export default function ConversationLogsPage() {
                 ))}
               </ul>
             </div>
+
+
+
+            {analysisResult.intent === "abnormal_alert" ? (
+              <div className="mt-3 rounded-md border border-amber-300 bg-amber-50 p-3">
+                <p className="text-sm font-semibold text-amber-900">Sandbox 異常提醒（僅 localStorage）</p>
+                <p className="mt-1 text-sm text-amber-900">
+                  這是 Sandbox 異常提醒，不會通知客人，不會送 LINE，不會寫入正式 messages。
+                </p>
+                <ul className="mt-2 list-disc pl-5 text-sm text-slate-800">
+                  <li>issue：{analysisResult.extracted.issue || "-"}</li>
+                  <li>urgency：{analysisResult.extracted.urgency || "-"}</li>
+                  <li>summary：{analysisResult.summary || "-"}</li>
+                </ul>
+                <button
+                  type="button"
+                  onClick={createSandboxAbnormalAlert}
+                  className="mt-3 rounded bg-amber-700 px-4 py-2 text-sm font-medium text-white hover:bg-amber-600"
+                >
+                  建立沙盒異常提醒
+                </button>
+                {sandboxAbnormalAlertMessage ? <p className="mt-2 text-sm text-slate-700">{sandboxAbnormalAlertMessage}</p> : null}
+              </div>
+            ) : null}
 
             {analysisResult.intent === "appointment_request" ? (
               <div className="mt-3">
