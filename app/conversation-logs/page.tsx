@@ -15,6 +15,8 @@ import { appendSandboxManualReplyTaskEvent } from "@/lib/sandboxManualReplyTaskE
 import { clearSandboxManualReplyResolutionEvents, listSandboxManualReplyResolutionEvents, SandboxManualReplyResolutionEvent } from "@/lib/sandboxManualReplyResolutionEvents";
 import { normalizeSandboxAlertSeverity } from "@/lib/sandboxAlertSeverity";
 import { AppointmentRequest } from "@/lib/types";
+import { evaluateSandboxServiceGate, SandboxGateDecision } from "@/lib/sandboxServiceGate";
+import { upsertSandboxKnowledgeGapEvent } from "@/lib/sandboxKnowledgeGapEvents";
 
 type ChatMessage = {
   id: string;
@@ -84,6 +86,7 @@ export default function ConversationLogsPage() {
   const [knowledgeAnswer, setKnowledgeAnswer] = useState<SandboxKnowledgeAnswer | null>(null);
   const [knowledgeLoading, setKnowledgeLoading] = useState(false);
   const [knowledgeError, setKnowledgeError] = useState("");
+  const [gateDecision, setGateDecision] = useState<SandboxGateDecision | null>(null);
 
   useEffect(() => {
     async function load() {
@@ -302,6 +305,7 @@ export default function ConversationLogsPage() {
     setManualReplyTaskMessage("");
     setKnowledgeAnswer(null);
     setKnowledgeError("");
+    setGateDecision(null);
 
     const customerMessage: ChatMessage = {
       id: `${Date.now()}-customer`,
@@ -310,6 +314,23 @@ export default function ConversationLogsPage() {
     };
     const nextHistory: SandboxHistoryMessage[] = [...chat, customerMessage].map(({ role, content }) => ({ role, content }));
     setChat((previous) => [...previous, customerMessage]);
+    const gate = evaluateSandboxServiceGate(message);
+    setGateDecision(gate);
+
+    if (gate.decision === "out_of_scope") {
+      setChat((previous) => [...previous, { id: `${Date.now()}-assistant`, role: "assistant", content: gate.suggested_reply }]);
+      setInputMessage("");
+      setIsAnalyzing(false);
+      return;
+    }
+
+    if (gate.decision === "manual_required") {
+      setChat((previous) => [...previous, { id: `${Date.now()}-assistant`, role: "assistant", content: gate.suggested_reply }]);
+      setManualReplyTaskMessage("AI 分流閘門判定建議建立 Manual Reply Task（此版本僅提示，不自動建立）。");
+      setInputMessage("");
+      setIsAnalyzing(false);
+      return;
+    }
 
     try {
       const response = await fetch("/api/sandbox/analyze-message", {
@@ -346,6 +367,7 @@ export default function ConversationLogsPage() {
     setManualReplyTaskMessage("");
     setKnowledgeAnswer(null);
     setKnowledgeError("");
+    setGateDecision(null);
     setError("");
   }
 
@@ -468,6 +490,15 @@ export default function ConversationLogsPage() {
         matched_articles: payload.matched_articles || [],
         needs_manual_reply: Boolean(payload.needs_manual_reply),
       });
+      if ((payload.matched_articles || []).length === 0 || Boolean(payload.needs_manual_reply)) {
+        const customerMessage = message;
+        upsertSandboxKnowledgeGapEvent({
+          representative_message: customerMessage,
+          suggested_title: `待補：${(analysisResult?.summary || customerMessage).slice(0, 30)}`,
+          suggested_category: "待補知識",
+          reason: "知識庫查無足夠相關資料，建議補充。",
+        });
+      }
     } catch (error) {
       setKnowledgeError(`知識庫沙盒查詢失敗：${(error as Error).message}`);
     } finally {
@@ -549,6 +580,19 @@ export default function ConversationLogsPage() {
             ))}
           </div>
         </div>
+        {gateDecision ? (
+          <div className="mt-4 rounded-lg border border-emerald-200 bg-emerald-50 p-4 text-sm text-emerald-900">
+            <h3 className="font-semibold">AI 分流閘門</h3>
+            <p className="mt-1">此分流閘門用於限制客服只處理 PIG HOUSE 服務範圍內問題，避免未來 LINE 被當作一般 AI 聊天工具濫用。</p>
+            <ul className="mt-2 list-disc pl-5">
+              <li>decision：{gateDecision.decision}</li>
+              <li>reason：{gateDecision.reason}</li>
+              <li>should_call_gemini：{gateDecision.should_call_gemini ? "true" : "false"}</li>
+              <li>should_query_knowledge_base：{gateDecision.should_query_knowledge_base ? "true" : "false"}</li>
+              <li>suggested_reply：{gateDecision.suggested_reply}</li>
+            </ul>
+          </div>
+        ) : null}
         <div className="mt-5 rounded-lg border border-fuchsia-200 bg-fuchsia-50 p-4">
           <div className="flex items-center justify-between gap-2">
             <h3 className="text-sm font-semibold text-fuchsia-900">Manual Reply Tasks 沙盒處理回寫訊息</h3>
