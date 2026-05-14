@@ -65,3 +65,14 @@ export type ConversationLog = {
   last_message: string;
   updated_at: string;
 };
+
+export type SandboxKnowledgeAnswer = {
+  answer: string;
+  matched_articles: Array<{
+    id: string;
+    title: string;
+    category: string;
+    score: number;
+  }>;
+  needs_manual_reply: boolean;
+};

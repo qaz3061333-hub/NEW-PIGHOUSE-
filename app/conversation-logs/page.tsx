@@ -6,7 +6,7 @@ import { SimpleTable } from "@/components/simple-table";
 import { conversationLogs as mockConversationLogs } from "@/lib/mockData";
 import { EMPTY_ANALYZE_RESULT, SandboxAnalyzeResult } from "@/lib/sandbox";
 import { isSupabaseConfigured, supabaseEnvWarning, supabaseRequest } from "@/lib/supabaseClient";
-import { ConversationLog } from "@/lib/types";
+import { ConversationLog, SandboxKnowledgeAnswer } from "@/lib/types";
 import { clearSandboxConversationEvents, listSandboxConversationEvents, SandboxConversationEvent } from "@/lib/sandboxConversationEvents";
 import { appendSandboxCustomerRescheduleEvent } from "@/lib/sandboxCustomerRescheduleEvents";
 import { appendSandboxAbnormalAlertEvent } from "@/lib/sandboxAbnormalAlertEvents";
@@ -80,6 +80,10 @@ export default function ConversationLogsPage() {
   const [abnormalResolutionEvents, setAbnormalResolutionEvents] = useState<SandboxAbnormalAlertResolutionEvent[]>([]);
   const [manualReplyTaskMessage, setManualReplyTaskMessage] = useState("");
   const [manualReplyResolutionEvents, setManualReplyResolutionEvents] = useState<SandboxManualReplyResolutionEvent[]>([]);
+
+  const [knowledgeAnswer, setKnowledgeAnswer] = useState<SandboxKnowledgeAnswer | null>(null);
+  const [knowledgeLoading, setKnowledgeLoading] = useState(false);
+  const [knowledgeError, setKnowledgeError] = useState("");
 
   useEffect(() => {
     async function load() {
@@ -296,6 +300,8 @@ export default function ConversationLogsPage() {
     setSandboxRequestMessage("");
     setSandboxAbnormalAlertMessage("");
     setManualReplyTaskMessage("");
+    setKnowledgeAnswer(null);
+    setKnowledgeError("");
 
     const customerMessage: ChatMessage = {
       id: `${Date.now()}-customer`,
@@ -338,6 +344,8 @@ export default function ConversationLogsPage() {
     setSandboxRequestMessage("");
     setSandboxAbnormalAlertMessage("");
     setManualReplyTaskMessage("");
+    setKnowledgeAnswer(null);
+    setKnowledgeError("");
     setError("");
   }
 
@@ -430,6 +438,40 @@ export default function ConversationLogsPage() {
       setSandboxRequestMessage(`建立失敗：${(createError as Error).message}`);
     } finally {
       setIsCreatingSandboxRequest(false);
+    }
+  }
+
+  async function handleKnowledgeAnswer() {
+    const message = inputMessage.trim() || chat.filter((item) => item.role === "customer").at(-1)?.content || "";
+    if (!message) {
+      setKnowledgeError("找不到客人原始訊息，請重新輸入後再試。");
+      return;
+    }
+
+    setKnowledgeLoading(true);
+    setKnowledgeError("");
+    setKnowledgeAnswer(null);
+
+    try {
+      const response = await fetch("/api/sandbox/knowledge-answer", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ message, analysisResult }),
+      });
+      const payload = (await response.json()) as { error?: string } & SandboxKnowledgeAnswer;
+      if (!response.ok) {
+        setKnowledgeError(payload.error || "知識庫沙盒查詢失敗，請稍後再試。");
+        return;
+      }
+      setKnowledgeAnswer({
+        answer: payload.answer,
+        matched_articles: payload.matched_articles || [],
+        needs_manual_reply: Boolean(payload.needs_manual_reply),
+      });
+    } catch (error) {
+      setKnowledgeError(`知識庫沙盒查詢失敗：${(error as Error).message}`);
+    } finally {
+      setKnowledgeLoading(false);
     }
   }
 
@@ -741,6 +783,44 @@ export default function ConversationLogsPage() {
                 {sandboxRequestMessage ? <p className="mt-2 text-sm text-slate-700">{sandboxRequestMessage}</p> : null}
               </div>
             ) : null}
+
+            {analysisResult.intent === "knowledge_question" ? (
+              <div className="mt-3 rounded-md border border-cyan-300 bg-cyan-50 p-3">
+                <p className="text-sm font-semibold text-cyan-900">Knowledge Base 沙盒查詢回答</p>
+                <p className="mt-1 text-sm text-cyan-900">這是 Sandbox 知識庫回答，不會通知客人、不會送 LINE、不會寫入正式 messages。</p>
+                <ul className="mt-2 list-disc pl-5 text-sm text-slate-800">
+                  <li>summary：{analysisResult.summary || "-"}</li>
+                  <li>issue：{analysisResult.extracted.issue || "-"}</li>
+                  <li>service_item：{analysisResult.extracted.service_item || "-"}</li>
+                  <li>原始客人訊息：{inputMessage.trim() || chat.filter((item) => item.role === "customer").at(-1)?.content || "-"}</li>
+                </ul>
+                <button type="button" onClick={handleKnowledgeAnswer} disabled={knowledgeLoading} className="mt-3 rounded bg-cyan-700 px-4 py-2 text-sm font-medium text-white hover:bg-cyan-600 disabled:opacity-50">
+                  {knowledgeLoading ? "查詢中..." : "查詢知識庫並產生沙盒回答"}
+                </button>
+                {knowledgeError ? <p className="mt-2 text-sm text-rose-700">{knowledgeError}</p> : null}
+                {knowledgeAnswer ? (
+                  <div className="mt-3 rounded border border-cyan-200 bg-white p-3 text-sm">
+                    <p className="font-medium text-slate-900">沙盒知識庫回答</p>
+                    <p className="mt-1 whitespace-pre-wrap text-slate-800">{knowledgeAnswer.answer}</p>
+                    <p className="mt-2 text-slate-700">needs_manual_reply：{knowledgeAnswer.needs_manual_reply ? "true" : "false"}</p>
+                    <p className="mt-2 font-medium text-slate-900">matched_articles</p>
+                    {knowledgeAnswer.matched_articles.length > 0 ? (
+                      <ul className="mt-1 list-disc pl-5 text-slate-800">
+                        {knowledgeAnswer.matched_articles.map((article) => (
+                          <li key={article.id}>{article.title}（{article.category} / score: {article.score} / id: {article.id}）</li>
+                        ))}
+                      </ul>
+                    ) : (
+                      <p className="mt-1 text-amber-800">知識庫資料不足，建議建立 Manual Reply Task 或補充 Knowledge Base。</p>
+                    )}
+                    {knowledgeAnswer.needs_manual_reply ? (
+                      <p className="mt-2 text-amber-800">知識庫資料不足，建議建立 Manual Reply Task 或補充 Knowledge Base。</p>
+                    ) : null}
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
+
             {analysisResult.intent === "manual_reply_task" ? (
               <div className="mt-3 rounded-md border border-fuchsia-300 bg-fuchsia-50 p-3">
                 <p className="text-sm font-semibold text-fuchsia-900">Sandbox 人工回覆任務（僅 localStorage）</p>
