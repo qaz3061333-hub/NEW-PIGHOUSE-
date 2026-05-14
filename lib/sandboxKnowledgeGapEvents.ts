@@ -21,7 +21,9 @@ type KnowledgeGapInput = Omit<
 export function normalizeKnowledgeGapQuestion(message: string) {
   return message
     .toLowerCase()
-    .replace(/[\s\p{P}\p{S}]+/gu, "")
+    .replace(/\s+/g, "")
+    .replace(/[，。！？、；：（）【】「」『』《》〈〉～—…·]/g, "")
+    .replace(/[!"#$%&'()*+,./:;<=>?@_`{|}~-]/g, "")
     .slice(0, 60);
 }
 
