@@ -107,3 +107,7 @@ export async function insertKnowledgeArticle<T>(payload: unknown) {
 export async function updateKnowledgeArticle<T>(id: string, payload: unknown) {
   return supabaseRequest<T>({ table: "knowledge_articles", method: "PATCH", query: `id=eq.${encodeURIComponent(id)}`, body: payload });
 }
+
+export async function deleteKnowledgeArticle<T>(id: string) {
+  return supabaseRequest<T>({ table: "knowledge_articles", method: "DELETE", query: `id=eq.${encodeURIComponent(id)}` });
+}
