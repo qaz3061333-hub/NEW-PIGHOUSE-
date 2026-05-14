@@ -5,6 +5,7 @@ import { PageShell } from "@/components/page-shell";
 import { SimpleTable } from "@/components/simple-table";
 import { kbArticles as mockKbArticles } from "@/lib/mockData";
 import {
+  deleteKnowledgeArticle,
   fetchKnowledgeArticles,
   insertKnowledgeArticle,
   isSupabaseConfigured,
@@ -105,6 +106,25 @@ export default function KnowledgeBasePage() {
     setForm({ title: article.title, category: article.category, content: article.content ?? "" });
   }
 
+  async function deleteArticle(article: KbArticle) {
+    const shouldDelete = window.confirm("確定要刪除這筆知識嗎？此操作無法復原。");
+    if (!shouldDelete) return;
+
+    if (!isSupabaseConfigured) {
+      setArticles((prev) => prev.filter((item) => item.id !== article.id));
+      setNotice(supabaseEnvWarning);
+      return;
+    }
+
+    try {
+      await deleteKnowledgeArticle<KbArticle[]>(article.id);
+      setArticles((prev) => prev.filter((item) => item.id !== article.id));
+      setNotice("已刪除知識。");
+    } catch (error) {
+      setNotice(`刪除失敗：${(error as Error).message}`);
+    }
+  }
+
   return (
     <PageShell title="Knowledge Base 知識庫管理" description="管理客服可引用的標準回覆與作業 SOP。">
       {notice ? <p className="mb-3 rounded-md bg-amber-50 px-3 py-2 text-sm text-amber-800">{notice}</p> : null}
@@ -166,6 +186,9 @@ export default function KnowledgeBasePage() {
                 </button>
                 <button className="rounded border px-2 py-1 text-xs" onClick={() => toggleActive(article)} type="button">
                   {article.is_active ? "停用" : "啟用"}
+                </button>
+                <button className="rounded border border-rose-300 px-2 py-1 text-xs text-rose-700" onClick={() => deleteArticle(article)} type="button">
+                  刪除
                 </button>
               </div>
             </td>

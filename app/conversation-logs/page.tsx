@@ -475,6 +475,9 @@ export default function ConversationLogsPage() {
     }
   }
 
+  const knowledgeAssistIntent = analysisResult?.intent === "knowledge_question" || analysisResult?.intent === "abnormal_alert";
+  const isAbnormalKnowledgeAssist = analysisResult?.intent === "abnormal_alert";
+
   return (
     <PageShell title="Conversation Logs 對話紀錄" description="客服與顧客歷史對話摘要。">
       {notice ? <p className="mb-3 rounded-md bg-amber-50 px-3 py-2 text-sm text-amber-800">{notice}</p> : null}
@@ -784,10 +787,16 @@ export default function ConversationLogsPage() {
               </div>
             ) : null}
 
-            {analysisResult.intent === "knowledge_question" ? (
+            {knowledgeAssistIntent ? (
               <div className="mt-3 rounded-md border border-cyan-300 bg-cyan-50 p-3">
-                <p className="text-sm font-semibold text-cyan-900">Knowledge Base 沙盒查詢回答</p>
-                <p className="mt-1 text-sm text-cyan-900">這是 Sandbox 知識庫回答，不會通知客人、不會送 LINE、不會寫入正式 messages。</p>
+                <p className="text-sm font-semibold text-cyan-900">
+                  {isAbnormalKnowledgeAssist ? "Knowledge Base 沙盒輔助查詢（異常事件）" : "Knowledge Base 沙盒查詢回答"}
+                </p>
+                <p className="mt-1 text-sm text-cyan-900">
+                  {isAbnormalKnowledgeAssist
+                    ? "這是異常事件的知識庫輔助查詢，只供員工判斷處理方向，不會自動回覆客人，不會送 LINE，不會寫入正式 messages。"
+                    : "這是 Sandbox 知識庫回答，不會通知客人、不會送 LINE、不會寫入正式 messages。"}
+                </p>
                 <ul className="mt-2 list-disc pl-5 text-sm text-slate-800">
                   <li>summary：{analysisResult.summary || "-"}</li>
                   <li>issue：{analysisResult.extracted.issue || "-"}</li>
@@ -795,7 +804,7 @@ export default function ConversationLogsPage() {
                   <li>原始客人訊息：{inputMessage.trim() || chat.filter((item) => item.role === "customer").at(-1)?.content || "-"}</li>
                 </ul>
                 <button type="button" onClick={handleKnowledgeAnswer} disabled={knowledgeLoading} className="mt-3 rounded bg-cyan-700 px-4 py-2 text-sm font-medium text-white hover:bg-cyan-600 disabled:opacity-50">
-                  {knowledgeLoading ? "查詢中..." : "查詢知識庫並產生沙盒回答"}
+                  {knowledgeLoading ? "查詢中..." : isAbnormalKnowledgeAssist ? "查詢知識庫作為處理參考" : "查詢知識庫並產生沙盒回答"}
                 </button>
                 {knowledgeError ? <p className="mt-2 text-sm text-rose-700">{knowledgeError}</p> : null}
                 {knowledgeAnswer ? (
@@ -811,10 +820,18 @@ export default function ConversationLogsPage() {
                         ))}
                       </ul>
                     ) : (
-                      <p className="mt-1 text-amber-800">知識庫資料不足，建議建立 Manual Reply Task 或補充 Knowledge Base。</p>
+                      <p className="mt-1 text-amber-800">
+                        {isAbnormalKnowledgeAssist
+                          ? "知識庫資料不足，請由人工客服處理，並視情況補充 Knowledge Base。"
+                          : "知識庫資料不足，建議建立 Manual Reply Task 或補充 Knowledge Base。"}
+                      </p>
                     )}
                     {knowledgeAnswer.needs_manual_reply ? (
-                      <p className="mt-2 text-amber-800">知識庫資料不足，建議建立 Manual Reply Task 或補充 Knowledge Base。</p>
+                      <p className="mt-2 text-amber-800">
+                        {isAbnormalKnowledgeAssist
+                          ? "知識庫資料不足，請由人工客服處理，並視情況補充 Knowledge Base。"
+                          : "知識庫資料不足，建議建立 Manual Reply Task 或補充 Knowledge Base。"}
+                      </p>
                     ) : null}
                   </div>
                 ) : null}
