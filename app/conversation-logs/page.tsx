@@ -332,6 +332,38 @@ export default function ConversationLogsPage() {
       return;
     }
 
+    if (gate.decision === "knowledge_candidate") {
+      const knowledgeOnlyResult: SandboxAnalyzeResult = {
+        intent: "knowledge_question",
+        confidence: 1,
+        target_module: "Knowledge Base",
+        summary: `服務資訊查詢：${message}`,
+        customer_reply: "這題需要先查詢 Knowledge Base，不會直接由 AI 自行回答。",
+        extracted: {
+          customer_name: "",
+          service_item: "",
+          preferred_date: "",
+          preferred_time: "",
+          issue: message,
+          urgency: "",
+          time_status: "unclear",
+          needs_clarification: false,
+        },
+      };
+      setAnalysisResult(knowledgeOnlyResult);
+      setChat((previous) => [
+        ...previous,
+        {
+          id: `${Date.now()}-assistant`,
+          role: "assistant",
+          content: "我先幫您查詢門市知識庫後再回覆，不會自行編造價格或服務內容。",
+        },
+      ]);
+      setInputMessage("");
+      setIsAnalyzing(false);
+      return;
+    }
+
     try {
       const response = await fetch("/api/sandbox/analyze-message", {
         method: "POST",
@@ -589,8 +621,17 @@ export default function ConversationLogsPage() {
               <li>reason：{gateDecision.reason}</li>
               <li>should_call_gemini：{gateDecision.should_call_gemini ? "true" : "false"}</li>
               <li>should_query_knowledge_base：{gateDecision.should_query_knowledge_base ? "true" : "false"}</li>
+              <li>should_create_manual_task：{gateDecision.should_create_manual_task ? "true" : "false"}</li>
               <li>suggested_reply：{gateDecision.suggested_reply}</li>
             </ul>
+          </div>
+        ) : null}
+        {gateDecision?.decision === "manual_required" ? (
+          <div className="mt-4 rounded-lg border-2 border-fuchsia-400 bg-fuchsia-50 p-4 text-fuchsia-900">
+            <h3 className="text-base font-bold">建議建立 Manual Reply Task</h3>
+            <p className="mt-2 text-sm">
+              此訊息涉及轉人工、客訴、退款、情緒激動或疑似醫療/傷害風險，建議由人工客服接手。
+            </p>
           </div>
         ) : null}
         <div className="mt-5 rounded-lg border border-fuchsia-200 bg-fuchsia-50 p-4">
