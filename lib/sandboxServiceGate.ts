@@ -90,7 +90,7 @@ export function evaluateSandboxServiceGate(message: string): SandboxGateDecision
       decision: "knowledge_candidate",
       reason: "訊息屬於可由知識庫回答的服務資訊問題。",
       suggested_reply: "我先幫您查詢門市知識庫後回覆。",
-      should_call_gemini: true,
+      should_call_gemini: false,
       should_query_knowledge_base: true,
       should_create_manual_task: false,
     };
