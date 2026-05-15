@@ -69,7 +69,7 @@ export function evaluateSandboxServiceGate(message: string): SandboxGateDecision
       reason: "訊息疑似異常照護或客訴，建議走異常判斷流程。",
       suggested_reply: "我們先協助判斷狀況，必要時會轉人工客服接手。",
       should_call_gemini: true,
-      should_query_knowledge_base: true,
+      should_query_knowledge_base: false,
       should_create_manual_task: true,
     };
   }

@@ -17,6 +17,7 @@ import { normalizeSandboxAlertSeverity } from "@/lib/sandboxAlertSeverity";
 import { AppointmentRequest } from "@/lib/types";
 import { evaluateSandboxServiceGate, SandboxGateDecision } from "@/lib/sandboxServiceGate";
 import { upsertSandboxKnowledgeGapEvent } from "@/lib/sandboxKnowledgeGapEvents";
+import { evaluateSandboxReplyPolicy } from "@/lib/sandboxReplyPolicy";
 
 type ChatMessage = {
   id: string;
@@ -290,6 +291,24 @@ export default function ConversationLogsPage() {
     return isoCandidate.toISOString();
   }
 
+  function createSandboxManualReplyTaskFromGate(message: string, gate: SandboxGateDecision) {
+    appendSandboxManualReplyTaskEvent({
+      id: `sandbox-manual-reply-${Date.now()}`,
+      source: "conversation_logs",
+      customer: "Sandbox Customer",
+      source_channel: "LINE Sandbox",
+      topic: `AI 分流轉人工：${message.slice(0, 30)}`,
+      last_message: message,
+      reply_note: gate.suggested_reply,
+      waiting_minutes: 0,
+      priority: "urgent",
+      created_at: new Date().toISOString(),
+      is_replied: false,
+      replied_at: null,
+    });
+    setManualReplyTaskMessage("已自動建立 Sandbox Manual Reply Task，請到 Manual Reply Tasks 查看。");
+  }
+
   async function submitSandboxMessage(event: FormEvent) {
     event.preventDefault();
     const message = inputMessage.trim();
@@ -327,8 +346,8 @@ export default function ConversationLogsPage() {
     }
 
     if (gate.decision === "manual_required") {
+      createSandboxManualReplyTaskFromGate(message, gate);
       setChat((previous) => [...previous, { id: `${Date.now()}-assistant`, role: "assistant", content: gate.suggested_reply }]);
-      setManualReplyTaskMessage("AI 分流閘門判定建議建立 Manual Reply Task（此版本僅提示，不自動建立）。");
       setInputMessage("");
       setIsAnalyzing(false);
       return;
@@ -415,6 +434,7 @@ export default function ConversationLogsPage() {
     setKnowledgeAnswer(null);
     setKnowledgeError("");
     setGateDecision(null);
+    setAutoKnowledgeQueryMessage("");
     setError("");
   }
 
@@ -571,6 +591,11 @@ export default function ConversationLogsPage() {
 
   const knowledgeAssistIntent = analysisResult?.intent === "knowledge_question" || analysisResult?.intent === "abnormal_alert";
   const isAbnormalKnowledgeAssist = analysisResult?.intent === "abnormal_alert";
+  const lastCustomerMessage = useMemo(() => chat.filter((item) => item.role === "customer").at(-1)?.content || "", [chat]);
+  const replyPolicyDecision = useMemo(
+    () => evaluateSandboxReplyPolicy({ gateDecision, analysisResult, knowledgeAnswer, lastMessage: lastCustomerMessage }),
+    [analysisResult, gateDecision, knowledgeAnswer, lastCustomerMessage],
+  );
 
   return (
     <PageShell title="Conversation Logs 對話紀錄" description="客服與顧客歷史對話摘要。">
@@ -659,10 +684,43 @@ export default function ConversationLogsPage() {
         ) : null}
         {gateDecision?.decision === "manual_required" ? (
           <div className="mt-4 rounded-lg border-2 border-fuchsia-400 bg-fuchsia-50 p-4 text-fuchsia-900">
-            <h3 className="text-base font-bold">建議建立 Manual Reply Task</h3>
+            <h3 className="text-base font-bold">已自動建立 Sandbox Manual Reply Task</h3>
             <p className="mt-2 text-sm">
               此訊息涉及轉人工、客訴、退款、情緒激動或疑似醫療/傷害風險，建議由人工客服接手。
             </p>
+            {manualReplyTaskMessage ? <p className="mt-2 rounded bg-white px-3 py-2 text-sm font-semibold text-fuchsia-950">{manualReplyTaskMessage}</p> : null}
+          </div>
+        ) : null}
+        {replyPolicyDecision ? (
+          <div className="mt-4 rounded-lg border border-violet-200 bg-violet-50 p-4 text-sm text-violet-950">
+            <h3 className="font-semibold">正式回覆政策判斷（Sandbox）</h3>
+            <p className="mt-1">這是正式上線前的回覆政策模擬，不會真的送 LINE，也不會寫入正式 messages。</p>
+            <dl className="mt-3 grid gap-2 md:grid-cols-2">
+              <div>
+                <dt className="font-medium">mode</dt>
+                <dd>{replyPolicyDecision.mode}</dd>
+              </div>
+              <div>
+                <dt className="font-medium">label</dt>
+                <dd>{replyPolicyDecision.label}</dd>
+              </div>
+              <div className="md:col-span-2">
+                <dt className="font-medium">reason</dt>
+                <dd>{replyPolicyDecision.reason}</dd>
+              </div>
+              <div className="md:col-span-2">
+                <dt className="font-medium">future_line_behavior</dt>
+                <dd>{replyPolicyDecision.future_line_behavior}</dd>
+              </div>
+              <div>
+                <dt className="font-medium">can_auto_send_in_future</dt>
+                <dd>{replyPolicyDecision.can_auto_send_in_future ? "true" : "false"}</dd>
+              </div>
+              <div>
+                <dt className="font-medium">sandbox_notice</dt>
+                <dd>{replyPolicyDecision.sandbox_notice}</dd>
+              </div>
+            </dl>
           </div>
         ) : null}
         <div className="mt-5 rounded-lg border border-fuchsia-200 bg-fuchsia-50 p-4">
