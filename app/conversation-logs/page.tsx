@@ -87,6 +87,7 @@ export default function ConversationLogsPage() {
   const [knowledgeLoading, setKnowledgeLoading] = useState(false);
   const [knowledgeError, setKnowledgeError] = useState("");
   const [gateDecision, setGateDecision] = useState<SandboxGateDecision | null>(null);
+  const [autoKnowledgeQueryMessage, setAutoKnowledgeQueryMessage] = useState("");
 
   useEffect(() => {
     async function load() {
@@ -306,6 +307,7 @@ export default function ConversationLogsPage() {
     setKnowledgeAnswer(null);
     setKnowledgeError("");
     setGateDecision(null);
+    setAutoKnowledgeQueryMessage("");
 
     const customerMessage: ChatMessage = {
       id: `${Date.now()}-customer`,
@@ -356,7 +358,20 @@ export default function ConversationLogsPage() {
         {
           id: `${Date.now()}-assistant`,
           role: "assistant",
-          content: "我先幫您查詢門市知識庫後再回覆，不會自行編造價格或服務內容。",
+          content: "我先幫您查詢門市知識庫後再產生沙盒回覆草稿，不會自行編造價格或服務內容。",
+        },
+      ]);
+      setAutoKnowledgeQueryMessage(message);
+      const knowledgeResult = await runKnowledgeAnswer(message, knowledgeOnlyResult);
+      setAutoKnowledgeQueryMessage("");
+      setChat((previous) => [
+        ...previous,
+        {
+          id: `${Date.now()}-assistant`,
+          role: "assistant",
+          content: knowledgeResult.ok && knowledgeResult.hasKnowledge
+            ? "已產生 Knowledge Base 沙盒回答草稿，請在下方確認。"
+            : "目前知識庫資料不足，已建立 Sandbox 知識庫補充建議，建議由人工確認。",
         },
       ]);
       setInputMessage("");
@@ -495,11 +510,14 @@ export default function ConversationLogsPage() {
     }
   }
 
-  async function handleKnowledgeAnswer() {
-    const message = inputMessage.trim() || chat.filter((item) => item.role === "customer").at(-1)?.content || "";
-    if (!message) {
+  async function runKnowledgeAnswer(
+    message: string,
+    currentAnalysisResult: SandboxAnalyzeResult | null,
+  ) {
+    const trimmedMessage = message.trim();
+    if (!trimmedMessage) {
       setKnowledgeError("找不到客人原始訊息，請重新輸入後再試。");
-      return;
+      return { ok: false, hasKnowledge: false };
     }
 
     setKnowledgeLoading(true);
@@ -510,32 +528,45 @@ export default function ConversationLogsPage() {
       const response = await fetch("/api/sandbox/knowledge-answer", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message, analysisResult }),
+        body: JSON.stringify({ message: trimmedMessage, analysisResult: currentAnalysisResult }),
       });
       const payload = (await response.json()) as { error?: string } & SandboxKnowledgeAnswer;
       if (!response.ok) {
         setKnowledgeError(payload.error || "知識庫沙盒查詢失敗，請稍後再試。");
-        return;
+        return { ok: false, hasKnowledge: false };
       }
+      const matchedArticles = payload.matched_articles || [];
+      const needsManualReply = Boolean(payload.needs_manual_reply);
       setKnowledgeAnswer({
         answer: payload.answer,
-        matched_articles: payload.matched_articles || [],
-        needs_manual_reply: Boolean(payload.needs_manual_reply),
+        matched_articles: matchedArticles,
+        needs_manual_reply: needsManualReply,
       });
-      if ((payload.matched_articles || []).length === 0 || Boolean(payload.needs_manual_reply)) {
-        const customerMessage = message;
+      if (matchedArticles.length === 0 || needsManualReply) {
         upsertSandboxKnowledgeGapEvent({
-          representative_message: customerMessage,
-          suggested_title: `待補：${(analysisResult?.summary || customerMessage).slice(0, 30)}`,
+          representative_message: trimmedMessage,
+          suggested_title: `待補：${(currentAnalysisResult?.summary || trimmedMessage).slice(0, 30)}`,
           suggested_category: "待補知識",
           reason: "知識庫查無足夠相關資料，建議補充。",
         });
       }
+      return { ok: true, hasKnowledge: matchedArticles.length > 0 && !needsManualReply };
     } catch (error) {
       setKnowledgeError(`知識庫沙盒查詢失敗：${(error as Error).message}`);
+      return { ok: false, hasKnowledge: false };
     } finally {
       setKnowledgeLoading(false);
     }
+  }
+
+  async function handleKnowledgeAnswer() {
+    const message = inputMessage.trim() || chat.filter((item) => item.role === "customer").at(-1)?.content || "";
+    if (!message) {
+      setKnowledgeError("找不到客人原始訊息，請重新輸入後再試。");
+      return;
+    }
+    setAutoKnowledgeQueryMessage("");
+    await runKnowledgeAnswer(message, analysisResult);
   }
 
   const knowledgeAssistIntent = analysisResult?.intent === "knowledge_question" || analysisResult?.intent === "abnormal_alert";
@@ -882,6 +913,11 @@ export default function ConversationLogsPage() {
                     ? "這是異常事件的知識庫輔助查詢，只供員工判斷處理方向，不會自動回覆客人，不會送 LINE，不會寫入正式 messages。"
                     : "這是 Sandbox 知識庫回答，不會通知客人、不會送 LINE、不會寫入正式 messages。"}
                 </p>
+                {!isAbnormalKnowledgeAssist && gateDecision?.decision === "knowledge_candidate" ? (
+                  <p className="mt-1 text-sm text-cyan-900">
+                    此知識型問題已由 AI 分流閘門自動查詢 Knowledge Base；這仍是沙盒草稿，不會送 LINE，也不會寫入正式 messages。
+                  </p>
+                ) : null}
                 <ul className="mt-2 list-disc pl-5 text-sm text-slate-800">
                   <li>summary：{analysisResult.summary || "-"}</li>
                   <li>issue：{analysisResult.extracted.issue || "-"}</li>
@@ -889,8 +925,15 @@ export default function ConversationLogsPage() {
                   <li>原始客人訊息：{inputMessage.trim() || chat.filter((item) => item.role === "customer").at(-1)?.content || "-"}</li>
                 </ul>
                 <button type="button" onClick={handleKnowledgeAnswer} disabled={knowledgeLoading} className="mt-3 rounded bg-cyan-700 px-4 py-2 text-sm font-medium text-white hover:bg-cyan-600 disabled:opacity-50">
-                  {knowledgeLoading ? "查詢中..." : isAbnormalKnowledgeAssist ? "查詢知識庫作為處理參考" : "查詢知識庫並產生沙盒回答"}
+                  {knowledgeLoading
+                    ? (autoKnowledgeQueryMessage ? "正在自動查詢 Knowledge Base..." : "查詢中...")
+                    : isAbnormalKnowledgeAssist
+                      ? "查詢知識庫作為處理參考"
+                      : "查詢知識庫並產生沙盒回答"}
                 </button>
+                {!isAbnormalKnowledgeAssist ? (
+                  <p className="mt-1 text-xs text-cyan-900">knowledge_candidate 會自動查詢；此按鈕保留供重新查詢或異常事件輔助查詢。</p>
+                ) : null}
                 {knowledgeError ? <p className="mt-2 text-sm text-rose-700">{knowledgeError}</p> : null}
                 {knowledgeAnswer ? (
                   <div className="mt-3 rounded border border-cyan-200 bg-white p-3 text-sm">
