@@ -18,6 +18,7 @@ import { AppointmentRequest } from "@/lib/types";
 import { evaluateSandboxServiceGate, SandboxGateDecision } from "@/lib/sandboxServiceGate";
 import { upsertSandboxKnowledgeGapEvent } from "@/lib/sandboxKnowledgeGapEvents";
 import { evaluateSandboxReplyPolicy } from "@/lib/sandboxReplyPolicy";
+import { evaluateSandboxArchivePolicy } from "@/lib/sandboxArchivePolicy";
 
 type ChatMessage = {
   id: string;
@@ -49,6 +50,49 @@ type CustomerRescheduleApiResult = {
   requested_at_iso: string | null;
   staff_note: string;
 };
+
+const sandboxArchivePolicyPreviews = [
+  {
+    title: "Manual Reply Task",
+    decision: evaluateSandboxArchivePolicy({
+      eventType: "manual_reply_task",
+      isReplied: true,
+      hasResolutionNote: true,
+      ageHours: 30,
+    }),
+  },
+  {
+    title: "Abnormal Alert",
+    decision: evaluateSandboxArchivePolicy({
+      eventType: "abnormal_alert",
+      isResolved: true,
+      isHighRisk: true,
+      ageHours: 30,
+    }),
+  },
+  {
+    title: "Appointment Request",
+    decision: evaluateSandboxArchivePolicy({
+      eventType: "appointment_request",
+      status: "confirmed",
+      ageHours: 30,
+    }),
+  },
+  {
+    title: "Knowledge Gap",
+    decision: evaluateSandboxArchivePolicy({
+      eventType: "knowledge_gap",
+      status: "added",
+    }),
+  },
+  {
+    title: "Conversation Logs",
+    decision: evaluateSandboxArchivePolicy({
+      eventType: "conversation",
+      ageHours: 30,
+    }),
+  },
+];
 
 function formatTaipei(value: string) {
   const d = new Date(value);
@@ -611,6 +655,47 @@ export default function ConversationLogsPage() {
           </tr>
         ))}
       </SimpleTable>
+
+      <section className="mt-6 rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+        <h2 className="text-lg font-semibold text-slate-900">Sandbox 封存政策預覽</h2>
+        <p className="mt-2 rounded-md bg-slate-50 px-3 py-2 text-sm text-slate-700">
+          這是未來每日封存前的規則預覽，不會真的封存、不會刪除資料、不會寫入 Supabase。
+        </p>
+        <div className="mt-4 grid gap-3 lg:grid-cols-2">
+          {sandboxArchivePolicyPreviews.map((preview) => (
+            <article key={preview.title} className="rounded-lg border border-slate-200 bg-slate-50 p-3 text-sm text-slate-800">
+              <div className="flex flex-wrap items-start justify-between gap-2">
+                <h3 className="font-semibold text-slate-900">{preview.title}</h3>
+                <span className="rounded border border-slate-300 bg-white px-2 py-1 text-xs font-medium text-slate-700">
+                  {preview.decision.eligibility}
+                </span>
+              </div>
+              <dl className="mt-3 grid gap-2 md:grid-cols-2">
+                <div>
+                  <dt className="font-medium text-slate-900">label</dt>
+                  <dd>{preview.decision.label}</dd>
+                </div>
+                <div>
+                  <dt className="font-medium text-slate-900">must_keep_audit_log</dt>
+                  <dd>{preview.decision.must_keep_audit_log ? "true" : "false"}</dd>
+                </div>
+                <div className="md:col-span-2">
+                  <dt className="font-medium text-slate-900">reason</dt>
+                  <dd>{preview.decision.reason}</dd>
+                </div>
+                <div className="md:col-span-2">
+                  <dt className="font-medium text-slate-900">future_archive_behavior</dt>
+                  <dd>{preview.decision.future_archive_behavior}</dd>
+                </div>
+                <div>
+                  <dt className="font-medium text-slate-900">can_delete_after_archive</dt>
+                  <dd>{preview.decision.can_delete_after_archive ? "true" : "false"}</dd>
+                </div>
+              </dl>
+            </article>
+          ))}
+        </div>
+      </section>
 
       <section className="mt-6 rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
         <h2 className="text-lg font-semibold text-slate-900">LINE 沙盒對話模擬器（Gemini 沙盒判斷 v1）</h2>

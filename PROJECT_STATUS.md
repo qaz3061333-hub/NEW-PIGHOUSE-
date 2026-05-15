@@ -67,6 +67,26 @@ NEW-PIGHOUSE- / new-pighouse-pjdh
 - 不要把 LINE channel secret、access token、Gemini API key、OpenAI key 貼到 ChatGPT 或 GitHub
 - `NEXT_PUBLIC_` 變數會暴露到前端，只能放公開型 key
 
+### 4. 事件封存與資料治理原則
+
+目前不做任何物理刪除。已處理事件未來應標記 `archived`，而不是直接刪除原資料。
+
+客訴、受傷、退款、人工處理紀錄、對話紀錄都必須保留 audit log，方便未來追查、還原處理脈絡與檢查系統判斷。
+
+每日 00:00 封存屬於未來階段，不是現在。本階段只做沙盒封存政策預覽，不做排程、不做真封存、不刪資料。
+
+未來封存流程建議：
+
+- 事件已處理
+- 超過保護時間，例如 24～48 小時
+- 有處理備註
+- 非高風險未結案
+- 寫入 archive / audit
+- 原資料標記 `archived`
+- 後台預設隱藏 `archived`
+
+不建議「上傳後自動刪除」，除非已有完整 audit log、備份、還原機制。
+
 ## 已完成基礎功能
 
 ### 1. Next.js 後台 MVP
