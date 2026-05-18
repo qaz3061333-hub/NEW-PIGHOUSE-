@@ -392,7 +392,7 @@ Gemini sandbox API route 會注入目前台灣時間：
 只有在以下條件都成立時，才允許建立 Sandbox 預約：
 
 - intent = appointment_request
-- time_status`= valid
+- time_status = valid
 - needs_clarification = false
 - preferred_date 格式為 YYYY-MM-DD
 - preferred_time 格式為 HH:mm
