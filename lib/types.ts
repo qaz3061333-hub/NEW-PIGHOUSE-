@@ -33,6 +33,9 @@ export type AppointmentRequest = {
   requested_at: string;
   status: AppointmentStatus;
   is_sandbox?: boolean;
+  archive_status: string;
+  archived_at: string | null;
+  archive_batch_id: string | null;
 };
 
 export type AbnormalAlert = {
@@ -42,6 +45,9 @@ export type AbnormalAlert = {
   triggered_at: string;
   summary: string;
   is_resolved: boolean;
+  archive_status: string;
+  archived_at: string | null;
+  archive_batch_id: string | null;
 };
 
 export type ManualReplyTask = {
@@ -56,6 +62,9 @@ export type ManualReplyTask = {
   priority: "normal" | "urgent";
   is_replied: boolean;
   replied_at?: string | null;
+  archive_status: string;
+  archived_at: string | null;
+  archive_batch_id: string | null;
 };
 
 export type ConversationLog = {
