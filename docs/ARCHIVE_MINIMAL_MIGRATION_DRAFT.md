@@ -1,158 +1,166 @@
 # Archive Minimal Migration SQL Draft v1
 
-資料日期：2026-05-18
+資料日期：2026-05-22
 
-本文件只是「未來可能執行的最小封存欄位 migration SQL 草案文件」，不是 migration，也不是執行指令。不可要求使用者直接複製 SQL 到 Supabase SQL Editor 執行。真正執行前，仍需要另開 `Archive Minimal Migration Review v1`，由 ChatGPT 審查 SQL、確認備份、確認 Supabase project、確認遠端欄位，並取得使用者明確同意。
+本文件已依 `Archive Minimal Migration Review v1` 修訂為「第一波保守版」。本文件仍然只是未來可能執行的 SQL 草案，不是 migration，也不是執行指令。不可要求使用者直接複製 SQL 到 Supabase SQL Editor 執行。
 
-本次沒有執行 SQL、沒有改 Supabase schema、沒有新增 migration 檔案、沒有新增 table、沒有修改 app / lib / api / helper，也沒有接 LINE、送 LINE 訊息、寫正式 Supabase `messages`、做 cron、做 Edge Function、改 RLS / login、改 Vercel env 或處理 PR #7。
+真正執行前，必須先完成 `docs/SUPABASE_BACKUP_CHECKLIST.md` 的 Supabase Backup Checklist v1，並另行整理 execution plan、檢查點與人工確認步驟。沒有使用者明確同意前，不得執行任何 SQL，也不得修改遠端 Supabase DB。
 
-## 1. 這次最小 migration 候選欄位
+本次文件修訂沒有執行 SQL、沒有改 Supabase schema、沒有新增 migration 檔案、沒有新增 table、沒有修改 app / lib / api / helper，也沒有接 LINE、送 LINE 訊息、寫正式 Supabase `messages`、做 cron、做 Edge Function、改 RLS / login、改 Vercel env、刪資料或處理 PR #7。
 
-### abnormal_alerts 候選欄位
+## 1. 第一波保守版候選欄位
 
-| 欄位 | 型別 | 為什麼加 |
-| --- | --- | --- |
-| `resolution_note` | `text` | 留下人工處理備註，避免只看到 `is_resolved` 卻不知道怎麼處理。 |
-| `follow_up_required` | `boolean not null default false` | 標記是否還要追蹤，避免高風險事件被太早封存。 |
-| `follow_up_at` | `timestamptz` | 記錄預計追蹤時間，方便未來人工複查或提醒。 |
-| `archive_status` | `text not null default 'active'` | 先用文字狀態標記是否仍在工作區，不使用 enum，保留 MVP 調整彈性。 |
-| `archived_at` | `timestamptz` | 記錄封存時間，方便未來查詢與回溯。 |
-| `archive_batch_id` | `text` | 記錄同一批封存操作，未來若要追查或 rollback 才有線索。 |
+第一波只建議在三張事件表加入三個 archive 欄位：
 
-### manual_reply_tasks 候選欄位
+- `archive_status text not null default 'active'`
+- `archived_at timestamptz`
+- `archive_batch_id text`
 
-| 欄位 | 型別 | 為什麼加 |
-| --- | --- | --- |
-| `resolved_at` | `timestamptz` | 區分「已回覆」與「任務已處理完成」的時間。 |
-| `resolution_note` | `text` | 留下人工處理備註，補足目前 `reply_note` 只偏向建議回覆重點的不足。 |
-| `archive_status` | `text not null default 'active'` | 讓任務可以先被標記為 active / archived，而不是刪除。 |
-| `archived_at` | `timestamptz` | 記錄封存時間。 |
-| `archive_batch_id` | `text` | 記錄封存批次。 |
+適用表：
 
-### appointment_requests 候選欄位
+- `abnormal_alerts`
+- `manual_reply_tasks`
+- `appointment_requests`
 
-| 欄位 | 型別 | 為什麼加 |
-| --- | --- | --- |
-| `confirmed_at` | `timestamptz` | 記錄預約被確認的時間，避免只靠 `status` 推測。 |
-| `rejected_at` | `timestamptz` | 記錄預約被拒絕的時間。 |
-| `completed_at` | `timestamptz` | 記錄服務或預約流程完成時間。 |
-| `resolved_at` | `timestamptz` | 記錄此申請已完成處理的時間，和狀態變更時間分開。 |
-| `archive_status` | `text not null default 'active'` | 讓預約申請能被標記封存，不做物理刪除。 |
-| `archived_at` | `timestamptz` | 記錄封存時間。 |
-| `archive_batch_id` | `text` | 記錄封存批次。 |
+這三個欄位的目的只是先建立「可標記封存、可記錄封存時間、可追溯封存批次」的最低能力。第一波不定義完整處理流程，不要求頁面開始隱藏 archived 資料，也不做任何自動封存。
 
-會影響的表只有 `abnormal_alerts`、`manual_reply_tasks`、`appointment_requests`。若未來真的執行，因為都是新增欄位，且 `archive_status` / `follow_up_required` 都有保守 default，理論上不需要改現有頁面才可維持讀取與既有 PATCH。現有頁面目前主要使用 `select=*` 讀資料，並 PATCH 既有欄位；新增欄位不會自動出現在 UI，也不會讓頁面開始封存資料。不過真正執行前仍需在 Preview / Production 對照驗證。
+## 2. 為什麼第一波只做 archive 三欄
 
-## 2. SQL 草案
+第一波只做 archive 三欄，是因為目前專案仍是沙盒 / MVP / 內部流程驗證階段，不是正式 LINE 上線階段。比較安全的做法是先建立封存標記能力，讓資料未來可以被標記為 active / archived 類型的狀態，而不是現在就補齊完整客服處理流程。
 
-這只是草案，不可直接執行；需經 Archive Minimal Migration Review v1 審查後才能決定。
+這樣做的好處是：
+
+- 先建立封存標記能力，但不先定義完整處理流程。
+- 不影響現有頁面；現有頁面目前不會因為這三欄自動改變篩選、隱藏或封存行為。
+- 不碰人工責任歸屬；目前還沒有正式 login、staff identity、RLS 與 audit log 設計，不適合先加 `resolved_by` / `actor_id` 類欄位。
+- 不碰正式 LINE messages；目前仍不接 LINE、不送 LINE、不寫正式 Supabase `messages`。
+- 不碰 audit log；`event_audit_logs` 需要獨立設計 actor、action、event type、metadata、權限與保存政策。
+- 不做自動封存；第一波只讓 DB 未來具備標記能力，不做 cron、Edge Function、排程或自動搬移資料。
+
+## 3. 第二波延後欄位
+
+以下欄位不放在第一波 SQL 草案中。它們可能有價值，但牽涉處理語意、頁面流程、人工責任、正式 LINE、audit log 或 staff identity，應等 UI 與人工流程更清楚後再討論。
+
+`abnormal_alerts` 第二波延後欄位：
+
+- `resolution_note`
+- `follow_up_required`
+- `follow_up_at`
+
+`manual_reply_tasks` 第二波延後欄位：
+
+- `resolved_at`
+- `resolution_note`
+
+`appointment_requests` 第二波延後欄位：
+
+- `confirmed_at`
+- `rejected_at`
+- `completed_at`
+- `resolved_at`
+
+## 4. SQL 草案
+
+這只是第一波保守版 SQL 草案，不可直接執行。真正執行前必須先完成 `docs/SUPABASE_BACKUP_CHECKLIST.md`，並另開 `Archive Minimal Migration Execution Plan v1` 整理最終操作計畫、檢查點與人工確認步驟。
 
 ```sql
 -- Archive Minimal Migration SQL Draft v1
--- 草案用途：未來可能新增最小封存治理欄位。
--- 這只是草案，不可直接執行；需經 Archive Minimal Migration Review v1 審查後才能決定。
+-- Revision: first-wave conservative version based on Archive Minimal Migration Review v1.
+-- Draft only. Do not execute directly.
 
 alter table public.abnormal_alerts
-  add column if not exists resolution_note text,
-  add column if not exists follow_up_required boolean not null default false,
-  add column if not exists follow_up_at timestamptz,
   add column if not exists archive_status text not null default 'active',
   add column if not exists archived_at timestamptz,
   add column if not exists archive_batch_id text;
 
 alter table public.manual_reply_tasks
-  add column if not exists resolved_at timestamptz,
-  add column if not exists resolution_note text,
   add column if not exists archive_status text not null default 'active',
   add column if not exists archived_at timestamptz,
   add column if not exists archive_batch_id text;
 
 alter table public.appointment_requests
-  add column if not exists confirmed_at timestamptz,
-  add column if not exists rejected_at timestamptz,
-  add column if not exists completed_at timestamptz,
-  add column if not exists resolved_at timestamptz,
   add column if not exists archive_status text not null default 'active',
   add column if not exists archived_at timestamptz,
   add column if not exists archive_batch_id text;
 ```
 
-可選方案，先不要當成必做：未來若確認 `archive_status` 只允許固定值，可再另外評估 check constraint，例如限制在 `active`, `archive_candidate`, `archived`, `archive_blocked`。本草案先不加入 constraint，避免 MVP 階段狀態命名還沒穩定就鎖死資料。
+第一波先不加 check constraint。`archive_status` 先使用 `text not null default 'active'`，保留 MVP 階段調整命名與流程的彈性。等 UI、人工封存規則與未來 audit log 設計更穩定後，再用單獨任務評估是否需要 constraint。
 
-## 3. rollback 草案
+## 5. rollback 草案
 
-真正 rollback 前必須先確認這些欄位是否已經有資料，不能隨便 drop。若欄位已寫入處理備註、封存批次或時間，drop column 會造成資料遺失，必須先匯出或另行備份。
+這只是 rollback 草案，不可直接執行。`drop column` 會造成資料遺失；真正 rollback 前必須先確認欄位是否已有資料，並另開 rollback review 任務。
 
 ```sql
 -- Archive Minimal Migration SQL Draft v1 rollback draft
--- 這只是 rollback 草案，不可直接執行。
--- 真正 rollback 前要確認欄位是否已有資料，不能隨便 drop。
+-- Draft only. Do not execute directly.
+-- Dropping columns can cause data loss.
 
 alter table public.abnormal_alerts
   drop column if exists archive_batch_id,
   drop column if exists archived_at,
-  drop column if exists archive_status,
-  drop column if exists follow_up_at,
-  drop column if exists follow_up_required,
-  drop column if exists resolution_note;
+  drop column if exists archive_status;
 
 alter table public.manual_reply_tasks
   drop column if exists archive_batch_id,
   drop column if exists archived_at,
-  drop column if exists archive_status,
-  drop column if exists resolution_note,
-  drop column if exists resolved_at;
+  drop column if exists archive_status;
 
 alter table public.appointment_requests
   drop column if exists archive_batch_id,
   drop column if exists archived_at,
-  drop column if exists archive_status,
-  drop column if exists resolved_at,
-  drop column if exists completed_at,
-  drop column if exists rejected_at,
-  drop column if exists confirmed_at;
+  drop column if exists archive_status;
 ```
 
-## 4. 執行前備份清單
+## 6. 執行前備份清單
 
-真正執行前至少要完成以下確認：
+執行前備份清單以 `docs/SUPABASE_BACKUP_CHECKLIST.md` 為準。真正執行前必須先完成 Supabase Backup Checklist v1，至少包含：
 
 1. 確認 Supabase project 是 `new-pighouse`。
-2. 重新查 `information_schema.columns`，確認遠端欄位最新狀態。
-3. 匯出或截圖目前 `appointment_requests` / `abnormal_alerts` / `manual_reply_tasks` 欄位。
-4. 匯出重要資料，或至少確認目前三張表的資料量。
-5. 確認執行者知道這會改遠端 DB，不是只改文件。
-6. 確認不是 Preview / 舊 project / 錯 Supabase URL。
-7. 確認使用者明確同意執行。
+2. 確認 Supabase URL 是 `https://iiwyaopmpdglpsnltaij.supabase.co`。
+3. 確認不是舊 project / preview / 錯 URL。
+4. 重新查 `information_schema.columns`，確認遠端欄位最新狀態。
+5. 匯出或截圖 `abnormal_alerts` / `manual_reply_tasks` / `appointment_requests` 欄位狀態。
+6. 匯出三張表 CSV，或至少保存 row count 查詢結果。
+7. 確認使用者知道這會改遠端 DB，不是只改文件。
+8. 確認使用者明確同意執行。
 
 可用的執行前欄位盤點 SQL 草案：
 
 ```sql
 select
   table_name,
+  ordinal_position,
   column_name,
   data_type,
   is_nullable,
   column_default
 from information_schema.columns
 where table_schema = 'public'
-  and table_name in ('appointment_requests', 'abnormal_alerts', 'manual_reply_tasks')
+  and table_name in (
+    'abnormal_alerts',
+    'manual_reply_tasks',
+    'appointment_requests'
+  )
 order by table_name, ordinal_position;
 ```
 
 可用的資料量確認 SQL 草案：
 
 ```sql
-select 'appointment_requests' as table_name, count(*) as row_count from public.appointment_requests
+select 'abnormal_alerts' as table_name, count(*) as row_count
+from public.abnormal_alerts
 union all
-select 'abnormal_alerts' as table_name, count(*) as row_count from public.abnormal_alerts
+select 'manual_reply_tasks' as table_name, count(*) as row_count
+from public.manual_reply_tasks
 union all
-select 'manual_reply_tasks' as table_name, count(*) as row_count from public.manual_reply_tasks;
+select 'appointment_requests' as table_name, count(*) as row_count
+from public.appointment_requests
+order by table_name;
 ```
 
-## 5. 執行後驗證 SQL
+## 7. 執行後驗證 SQL
 
-若未來真的經審查後執行 migration，至少要用以下 SQL 確認候選欄位存在：
+若未來真的經審查後執行 migration，至少要用以下 SQL 確認三張表都只新增第一波三個 archive 欄位：
 
 ```sql
 select
@@ -163,66 +171,95 @@ select
   column_default
 from information_schema.columns
 where table_schema = 'public'
-  and (
-    (table_name = 'abnormal_alerts' and column_name in (
-      'resolution_note',
-      'follow_up_required',
-      'follow_up_at',
-      'archive_status',
-      'archived_at',
-      'archive_batch_id'
-    ))
-    or
-    (table_name = 'manual_reply_tasks' and column_name in (
-      'resolved_at',
-      'resolution_note',
-      'archive_status',
-      'archived_at',
-      'archive_batch_id'
-    ))
-    or
-    (table_name = 'appointment_requests' and column_name in (
-      'confirmed_at',
-      'rejected_at',
-      'completed_at',
-      'resolved_at',
-      'archive_status',
-      'archived_at',
-      'archive_batch_id'
-    ))
+  and table_name in (
+    'abnormal_alerts',
+    'manual_reply_tasks',
+    'appointment_requests'
+  )
+  and column_name in (
+    'archive_status',
+    'archived_at',
+    'archive_batch_id'
   )
 order by table_name, column_name;
 ```
 
-## 6. 本次明確不做
+也可用以下 SQL 確認舊資料是否維持保守預設狀態：
 
-本次不做以下欄位、table 或功能：
+```sql
+select
+  'abnormal_alerts' as table_name,
+  count(*) filter (where archive_status = 'active') as active_count,
+  count(*) filter (where archive_status is distinct from 'active') as not_active_count,
+  count(*) filter (where archived_at is null) as archived_at_null_count,
+  count(*) filter (where archived_at is not null) as archived_at_not_null_count,
+  count(*) filter (where archive_batch_id is null) as archive_batch_id_null_count,
+  count(*) filter (where archive_batch_id is not null) as archive_batch_id_not_null_count
+from public.abnormal_alerts
+union all
+select
+  'manual_reply_tasks' as table_name,
+  count(*) filter (where archive_status = 'active') as active_count,
+  count(*) filter (where archive_status is distinct from 'active') as not_active_count,
+  count(*) filter (where archived_at is null) as archived_at_null_count,
+  count(*) filter (where archived_at is not null) as archived_at_not_null_count,
+  count(*) filter (where archive_batch_id is null) as archive_batch_id_null_count,
+  count(*) filter (where archive_batch_id is not null) as archive_batch_id_not_null_count
+from public.manual_reply_tasks
+union all
+select
+  'appointment_requests' as table_name,
+  count(*) filter (where archive_status = 'active') as active_count,
+  count(*) filter (where archive_status is distinct from 'active') as not_active_count,
+  count(*) filter (where archived_at is null) as archived_at_null_count,
+  count(*) filter (where archived_at is not null) as archived_at_not_null_count,
+  count(*) filter (where archive_batch_id is null) as archive_batch_id_null_count,
+  count(*) filter (where archive_batch_id is not null) as archive_batch_id_not_null_count
+from public.appointment_requests
+order by table_name;
+```
 
-- `deleted_at`
-- `event_audit_logs` table
-- `knowledge_gap_events` table
-- archive cron
-- `messages` 正式 LINE 欄位
-- `sent_to_line`
-- `sent_at`
-- LINE webhook
-- LINE signature validation
-- 正式 LINE 自動回覆
-- RLS policy
-- login / `staff_users`
-- Edge Function
-- Vercel Cron
-- 物理刪除
-- Supabase schema 實際修改
-- migration 檔案
-- app / lib / api 行為修改
+## 8. 明確不做項目
 
-## 7. 暫緩欄位與 table 的原因
+本文件與本次 Draft Revision v1 明確不做：
 
-`resolved_by` / `actor_id` / `updated_by` 暫緩，因為目前沒有 login、staff identity、staff_users 或穩定的權限模型。若現在先加這些欄位，未來可能填入不一致的人名、空值或臨時字串，反而讓 audit 與責任歸屬更混亂。
+- 不執行 SQL
+- 不改 schema
+- 不新增 migration
+- 不新增 table
+- 不改 app / lib / api
+- 不改 helper
+- 不碰 `messages`
+- 不接 LINE
+- 不送 LINE
+- 不寫正式 Supabase messages
+- 不做 RLS / login
+- 不做 cron
+- 不做 Edge Function
+- 不刪資料
+- 不改 Vercel env
+- 不處理 PR #7
+- 不新增 `deleted_at`
+- 不新增 `event_audit_logs` table
+- 不新增 `knowledge_gap_events` table
+- 不新增 LINE webhook / LINE signature validation
+- 不新增正式 LINE 自動回覆
+- 不新增物理刪除流程
 
-`event_audit_logs` 很重要，因為未來狀態變更、人工處理、AI 分流、LINE 發送與封存都應留下可追查紀錄。不過它需要先決定 actor、action、event type、metadata、RLS 與保留政策。本次目標是最小欄位草案，不新增 table，避免在 audit log 設計還沒穩定前先建立錯誤結構。
+## 9. 下一步建議
 
-`deleted_at` 本次不加，因為目前仍是沙盒 / MVP 階段，還沒有完整備份、還原、audit log 與權限流程。封存應先用 `archive_status` 這種可回溯的標記，不應太早導入容易被誤解成刪除流程的欄位。
+完成 Draft Revision v1 後，下一步才適合做：
 
-`messages` 正式 LINE 欄位本次不加，包含 `sent_to_line`、`sent_at`、正式 `conversation_id`、`sender_type`、`reply_policy_mode` 等。原因是目前不接真 LINE、不送 LINE、不寫正式 Supabase `messages`，且正式 LINE 需要 webhook、signature validation、權限、稽核與資料模型一起設計，不能只補幾個欄位就上線。
+**Archive Minimal Migration Execution Plan v1**
+
+但 Execution Plan v1 仍不代表直接執行 SQL。它只是整理真正要貼到 Supabase SQL Editor 前的最終操作計畫、檢查點與人工確認步驟。
+
+Execution Plan v1 應該至少確認：
+
+- 是否已完成 `docs/SUPABASE_BACKUP_CHECKLIST.md`。
+- 最終 SQL 是否仍只包含三個 archive 欄位。
+- rollback 風險與資料遺失提醒是否清楚。
+- 使用者是否明確知道下一步會改遠端 DB。
+- 使用者是否明確同意執行。
+
+在 Execution Plan v1 完成且使用者再次明確同意前，仍不得執行 SQL。
