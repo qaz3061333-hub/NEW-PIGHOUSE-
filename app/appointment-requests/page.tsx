@@ -330,11 +330,12 @@ export default function AppointmentRequestsPage() {
           {actionMessage}
         </p>
       ) : null}
-      <SimpleTable headers={["申請編號", "來源", "寵物", "服務", "飼主", "申請時間", "狀態", "操作"]}>
+      <SimpleTable headers={["申請編號", "來源", "寵物", "服務", "飼主", "申請時間", "狀態", "封存狀態", "操作"]}>
         {requests.map((request) => {
           const isSandbox = request.is_sandbox ?? false;
           const isExpanded = expandedId === request.id;
           const customerRescheduleEvent = customerRescheduleEvents[request.id];
+          const archiveStatus = request.archive_status?.trim() || "未設定";
           return (
             <Fragment key={request.id}>
               <tr className={isSandbox ? "bg-amber-50/60" : undefined}>
@@ -365,6 +366,7 @@ export default function AppointmentRequestsPage() {
                     ))}
                   </select>
                 </td>
+                <td className="px-4 py-3 text-xs text-slate-500">封存狀態：{archiveStatus}</td>
                 <td className="px-4 py-3">
                   <div className="flex flex-wrap gap-2">
                     <button
@@ -388,7 +390,7 @@ export default function AppointmentRequestsPage() {
               </tr>
               {isExpanded ? (
                 <tr className={isSandbox ? "bg-amber-50/40" : "bg-slate-50/60"}>
-                  <td className="px-4 py-3" colSpan={8}>
+                  <td className="px-4 py-3" colSpan={9}>
                     <div className="rounded-lg border border-slate-200 bg-white p-4">
                       <h3 className="mb-2 text-sm font-semibold text-slate-800">預約詳情</h3>
                       <dl className="grid gap-2 text-sm text-slate-700 md:grid-cols-2">
@@ -437,7 +439,7 @@ export default function AppointmentRequestsPage() {
 
               {isSandbox && customerRescheduleEvent ? (
                 <tr className="bg-amber-50">
-                  <td className="px-4 py-3" colSpan={8}>
+                  <td className="px-4 py-3" colSpan={9}>
                     <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
                       <p className="font-semibold">客人主動要求改約，不是新預約。</p>
                       <p>原預約時間：{customerRescheduleEvent.old_requested_at}</p>
@@ -450,7 +452,7 @@ export default function AppointmentRequestsPage() {
 
               {isSandbox && request.status === "confirmed" ? (
                 <tr className="bg-emerald-50/50">
-                  <td className="px-4 py-3" colSpan={8}>
+                  <td className="px-4 py-3" colSpan={9}>
                     <div className="rounded-md border border-emerald-200 bg-emerald-50 px-3 py-3">
                       <h4 className="text-sm font-semibold text-emerald-900">Sandbox 確認預約回覆</h4>
                       <p className="mt-2 rounded-md border border-emerald-200 bg-white px-3 py-2 text-sm text-slate-800">
@@ -474,7 +476,7 @@ export default function AppointmentRequestsPage() {
               ) : null}
               {isSandbox && request.status === "proposed_new_time" ? (
                 <tr className="bg-indigo-50/60">
-                  <td className="px-4 py-3" colSpan={8}>
+                  <td className="px-4 py-3" colSpan={9}>
                     <div className="rounded-md border border-indigo-200 bg-indigo-50 px-3 py-3">
                       <h4 className="text-sm font-semibold text-indigo-900">Gemini 沙盒改約回覆</h4>
                       {(() => {
@@ -580,7 +582,7 @@ export default function AppointmentRequestsPage() {
               ) : null}
               {isSandbox && request.status === "rejected" ? (
                 <tr className="bg-rose-50/50">
-                  <td className="px-4 py-3" colSpan={8}>
+                  <td className="px-4 py-3" colSpan={9}>
                     <div className="rounded-md border border-rose-200 bg-rose-50 px-3 py-3">
                       <h4 className="text-sm font-semibold text-rose-900">Gemini 沙盒拒絕回覆</h4>
                       {(() => {

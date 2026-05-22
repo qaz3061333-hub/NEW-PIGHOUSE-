@@ -147,11 +147,12 @@ export default function ManualReplyTasksPage() {
           ))}
         </SimpleTable>
       </section>
-      <SimpleTable headers={["客戶", "來源渠道", "主題", "最後訊息", "建議回覆重點", "等待時間（分鐘）", "優先度", "狀態 / 操作"]}>
+      <SimpleTable headers={["客戶", "來源渠道", "主題", "最後訊息", "建議回覆重點", "等待時間（分鐘）", "優先度", "封存狀態", "狀態 / 操作"]}>
         {tasks.map((task) => {
           const sourceChannel = task.source_channel?.trim() || "LINE";
           const lastMessage = task.last_message?.trim() || "尚無最後訊息";
           const replyNote = task.reply_note?.trim() || "尚無建議回覆重點";
+          const archiveStatus = task.archive_status?.trim() || "未設定";
 
           return (
             <tr key={task.id}>
@@ -171,6 +172,7 @@ export default function ManualReplyTasksPage() {
               <td className="px-4 py-3">
                 <span className="rounded-full bg-amber-50 px-2 py-1 text-xs text-amber-700">{task.priority}</span>
               </td>
+              <td className="px-4 py-3 text-xs text-slate-500">封存狀態：{archiveStatus}</td>
               <td className="px-4 py-3">
                 <div className="flex flex-col gap-2">
                   <button className="rounded border border-slate-300 px-2 py-1 text-xs" onClick={() => copyReplyNote(task)} type="button">

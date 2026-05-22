@@ -137,7 +137,7 @@ export default function AbnormalAlertsPage() {
         )}
       </section>
 
-      <SimpleTable headers={["事件編號", "嚴重度", "標題", "觸發時間", "摘要", "處理"]}>
+      <SimpleTable headers={["事件編號", "嚴重度", "標題", "觸發時間", "摘要", "封存狀態", "處理"]}>
         {alerts.map((alert) => (
           <tr key={alert.id}>
             <td className="px-4 py-3">{alert.id}</td>
@@ -147,6 +147,7 @@ export default function AbnormalAlertsPage() {
             <td className="px-4 py-3">{alert.title}</td>
             <td className="px-4 py-3">{alert.triggered_at}</td>
             <td className="px-4 py-3">{alert.summary}</td>
+            <td className="px-4 py-3 text-xs text-slate-500">封存狀態：{alert.archive_status?.trim() || "未設定"}</td>
             <td className="px-4 py-3">
               {alert.is_resolved ? (
                 <span className="rounded-full bg-emerald-50 px-2 py-1 text-xs text-emerald-700">已處理</span>
