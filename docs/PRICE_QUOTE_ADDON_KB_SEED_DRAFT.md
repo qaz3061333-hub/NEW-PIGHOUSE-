@@ -4,7 +4,7 @@
 
 本文件適用於 NEW-PIGHOUSE- / new-pighouse-pjdh 專案。此專案目前仍是沙盒 / MVP / 內部流程驗證階段，不是正式 LINE 上線階段。
 
-本 revision 依使用者最新確認的加購 / 單項 / 住宿外加規則，修正加購項目 KB 草案。本文仍只是文件草案，不是正式 Knowledge Base，不是 SQL，不是 DB 匯入內容，也不是功能實作。
+本 revision 依使用者最新確認的加購 / 單項 / 住宿外加規則，修正加購項目 KB 草案。本文仍只是文件草案，不是正式 Knowledge Base，不是 SQL，不是 DB 匯入內容，也不是功能實作。本次更新仍維持 documentation-only 範圍。
 
 ## 一、文件目的
 
