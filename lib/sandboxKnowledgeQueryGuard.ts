@@ -79,6 +79,35 @@ function articleRequires(content: string, field: "體重" | "膚質" | "分店" 
   return REQUIRED_INFO_MARKERS.some((marker) => content.includes(marker)) || content.includes("報價前");
 }
 
+function isPolicyArticle(article: SandboxKnowledgeGuardArticle) {
+  return (
+    article.category.includes("policy") ||
+    article.title.includes("規則") ||
+    article.content.includes("報價共通原則") ||
+    article.content.includes("高風險邊界")
+  );
+}
+
+function isAddonArticle(article: SandboxKnowledgeGuardArticle) {
+  return (
+    article.category.includes("price_quote_addon") ||
+    article.title.includes("加購") ||
+    article.content.includes("單項基本美容服務")
+  );
+}
+
+function getConstraintArticles(articles: SandboxKnowledgeGuardArticle[]) {
+  const serviceArticles = articles.filter((article) => !isPolicyArticle(article));
+  const primaryArticle = serviceArticles[0] || articles[0];
+  if (!primaryArticle) return [];
+
+  if (isAddonArticle(primaryArticle) && !articleRequires(primaryArticle.content, "體重")) {
+    return [primaryArticle];
+  }
+
+  return serviceArticles.length > 0 ? serviceArticles : [primaryArticle];
+}
+
 function findManualWeightLimitKg(content: string): number | null {
   const normalized = content.replace(/[０-９]/g, (char) => String.fromCharCode(char.charCodeAt(0) - 65248));
   const matches = normalized.matchAll(/(\d+(?:\.\d+)?)\s*kg\s*以上[\s\S]{0,120}(?:不可自動報價|不自動報價|不由系統自動|致電|轉人工|人工)/gi);
@@ -129,7 +158,7 @@ export function evaluateSandboxKnowledgeQueryGuard(
 ): SandboxKnowledgeGuardResult {
   const query = compactText(message);
   const customerWeightKg = extractCustomerWeightKg(query);
-  const combinedContent = articles.map((article) => `${article.title}\n${article.category}\n${article.content}`).join("\n\n");
+  const constraintArticles = getConstraintArticles(articles);
 
   if (isHighRiskQuery(query)) {
     return {
@@ -153,16 +182,23 @@ export function evaluateSandboxKnowledgeQueryGuard(
   }
 
   const missingFields: string[] = [];
-  if ((hasMultipleWeightTiers(combinedContent) || articleRequires(combinedContent, "體重")) && customerWeightKg === null) {
+  if (
+    constraintArticles.some((article) => hasMultipleWeightTiers(article.content) || articleRequires(article.content, "體重")) &&
+    customerWeightKg === null
+  ) {
     missingFields.push("體重");
   }
-  if (articleRequires(combinedContent, "膚質") && !includesAny(query, SKIN_KEYWORDS)) {
+  if (constraintArticles.some((article) => articleRequires(article.content, "膚質")) && !includesAny(query, SKIN_KEYWORDS)) {
     missingFields.push("膚質");
   }
-  if (articleRequires(combinedContent, "分店") && !includesAny(query, BRANCH_KEYWORDS)) {
+  if (constraintArticles.some((article) => articleRequires(article.content, "分店")) && !includesAny(query, BRANCH_KEYWORDS)) {
     missingFields.push("分店");
   }
-  if (articleRequires(combinedContent, "品種") && !hasPetTypeHint(query) && !hasKnownArticlePetDescriptor(query, articles)) {
+  if (
+    constraintArticles.some((article) => articleRequires(article.content, "品種")) &&
+    !hasPetTypeHint(query) &&
+    !hasKnownArticlePetDescriptor(query, constraintArticles)
+  ) {
     missingFields.push("品種或類型");
   }
 
