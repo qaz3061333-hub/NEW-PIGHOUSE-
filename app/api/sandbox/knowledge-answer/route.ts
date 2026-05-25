@@ -1,5 +1,9 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
+import {
+  buildGuardedKnowledgeArticleSnippet,
+  evaluateSandboxKnowledgeQueryGuard,
+} from "@/lib/sandboxKnowledgeQueryGuard";
 
 type KnowledgeAnswerRequest = {
   message?: string;
@@ -22,7 +26,7 @@ type KnowledgeArticle = {
 
 const GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/models";
 const MAX_MATCHED_ARTICLES = 3;
-const CONTENT_SNIPPET_LIMIT = 600;
+const CONTENT_SNIPPET_LIMIT = 2500;
 
 function compactText(value: string) {
   return value.trim().replace(/\s+/g, " ");
@@ -57,6 +61,10 @@ function extractGeminiText(payload: unknown): string {
   const root = payload as { candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }> };
   const text = root?.candidates?.[0]?.content?.parts?.[0]?.text;
   return typeof text === "string" ? text.trim() : "";
+}
+
+function needsManualReply(answer: string) {
+  return ["需人工確認", "需要人工確認", "轉人工", "建議就醫"].some((keyword) => answer.includes(keyword));
 }
 
 export async function POST(request: Request) {
@@ -115,15 +123,50 @@ export async function POST(request: Request) {
       });
     }
 
+    const guard = evaluateSandboxKnowledgeQueryGuard(
+      queryMessage,
+      matched.map(({ article }) => ({
+        title: article.title,
+        category: article.category,
+        content: article.content,
+      })),
+    );
+
+    if (guard.answer) {
+      return NextResponse.json({
+        answer: guard.answer,
+        matched_articles: matched.map(({ article, score }) => ({
+          id: article.id,
+          title: article.title,
+          category: article.category,
+          score,
+        })),
+        needs_manual_reply: guard.needs_manual_reply || needsManualReply(guard.answer),
+      });
+    }
+
     const context = matched
       .map(({ article }, idx) => {
-        const clipped = compactText(article.content || "").slice(0, CONTENT_SNIPPET_LIMIT);
+        const clipped = buildGuardedKnowledgeArticleSnippet(article, queryMessage, CONTENT_SNIPPET_LIMIT);
         return `資料 ${idx + 1}\n標題：${article.title}\n分類：${article.category}\n內容：${clipped}`;
       })
       .join("\n\n");
 
     const model = process.env.GEMINI_MODEL || "gemini-2.0-flash";
-    const prompt = `你是寵物門市客服助理。\n請只根據下列知識庫資料回答客人，使用繁體中文、語氣友善、內容精簡。\n若資料不足或無法確認，請明確說「需要人工確認」，禁止編造。\n\n客人問題：${queryMessage}\n\n可用知識庫資料：\n${context}`;
+    const prompt = `你是寵物門市客服助理。
+使用者問題預設是 PIG HOUSE 寵物服務情境。
+不要把「剪指甲、洗澡、美容、住宿」解讀成人類美甲、人類美容或人類住宿。
+若問題語意不清，請先以寵物服務情境追問，例如詢問毛孩是否要單做該服務，不要問人類手部或足部。
+
+請只根據下列知識庫資料回答客人，使用繁體中文、語氣友善、內容精簡。
+Knowledge Base 沙盒回答不要整段複製 KB；只回可回答的最小價格區間、追問缺少資訊、提醒現場評估、或建議就醫 / 轉人工。
+若資料不足或無法確認，請明確說「需要人工確認」，禁止編造。
+${guard.prompt_instructions}
+
+客人問題：${queryMessage}
+
+可用知識庫資料：
+${context}`;
 
     const response = await fetch(`${GEMINI_BASE_URL}/${model}:generateContent?key=${apiKey}`, {
       method: "POST",
@@ -154,7 +197,7 @@ export async function POST(request: Request) {
         category: article.category,
         score,
       })),
-      needs_manual_reply: answer.includes("需要人工確認"),
+      needs_manual_reply: needsManualReply(answer),
     });
   } catch (error) {
     return NextResponse.json({ error: `知識庫沙盒查詢失敗：${(error as Error).message}` }, { status: 500 });
