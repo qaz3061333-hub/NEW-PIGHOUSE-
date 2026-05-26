@@ -7,6 +7,7 @@ import {
 
 type KnowledgeAnswerRequest = {
   message?: string;
+  history?: Array<{ role: "customer" | "assistant"; content: string }>;
   analysisResult?: {
     summary?: string;
     extracted?: {
@@ -27,9 +28,68 @@ type KnowledgeArticle = {
 const GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/models";
 const MAX_MATCHED_ARTICLES = 3;
 const CONTENT_SNIPPET_LIMIT = 2500;
+const MAX_CONTEXT_HISTORY_MESSAGES = 6;
+const HISTORY_MESSAGE_LIMIT = 220;
+const CONTEXTUAL_QUERY_LIMIT = 900;
+const SUPPLEMENTAL_QUERY_PATTERN =
+  /(\d+(?:[.,]\d+)?\s*(?:kg|公斤|g|公克)|油性|乾性|敏感|短毛|長毛|中和|板橋|很兇|會咬)/i;
 
 function compactText(value: string) {
   return value.trim().replace(/\s+/g, " ");
+}
+
+function normalizeHistory(history: KnowledgeAnswerRequest["history"] = []) {
+  if (!Array.isArray(history)) return [];
+  return history
+    .filter((item) => item.role === "customer" || item.role === "assistant")
+    .map((item) => ({
+      role: item.role,
+      content: compactText(item.content || "").slice(0, HISTORY_MESSAGE_LIMIT),
+    }))
+    .filter((item) => item.content.length > 0)
+    .slice(-MAX_CONTEXT_HISTORY_MESSAGES);
+}
+
+function isLikelySupplementalQuery(message: string) {
+  const normalized = compactText(message);
+  if (!normalized) return false;
+  if (SUPPLEMENTAL_QUERY_PATTERN.test(normalized)) return true;
+  if (/[?？]/.test(normalized) && normalized.length > 18) return false;
+  return normalized.length <= 18;
+}
+
+function buildContextualQuery(queryMessage: string, history: KnowledgeAnswerRequest["history"] = []) {
+  const recentHistory = normalizeHistory(history);
+  const previousHistory =
+    recentHistory.at(-1)?.role === "customer" && recentHistory.at(-1)?.content === queryMessage
+      ? recentHistory.slice(0, -1)
+      : recentHistory;
+
+  if (!isLikelySupplementalQuery(queryMessage)) {
+    return queryMessage;
+  }
+
+  const previousCustomerMessage = [...previousHistory]
+    .reverse()
+    .find((item) => item.role === "customer" && item.content !== queryMessage)?.content;
+
+  if (!previousCustomerMessage) {
+    return queryMessage;
+  }
+
+  const recentAssistantMessage = [...previousHistory]
+    .reverse()
+    .find((item) => item.role === "assistant")?.content;
+
+  return compactText(
+    [
+      `上一個客人問題：${previousCustomerMessage}`,
+      recentAssistantMessage ? `最近一次沙盒助理回覆：${recentAssistantMessage}` : "",
+      `目前客人補充：${queryMessage}`,
+    ]
+      .filter(Boolean)
+      .join("\n"),
+  ).slice(0, CONTEXTUAL_QUERY_LIMIT);
 }
 
 function buildTerms(parts: string[]): string[] {
@@ -69,12 +129,14 @@ function needsManualReply(answer: string) {
 
 export async function POST(request: Request) {
   try {
-    const { message, analysisResult } = (await request.json()) as KnowledgeAnswerRequest;
+    const { message, analysisResult, history } = (await request.json()) as KnowledgeAnswerRequest;
     const queryMessage = compactText(message || "");
 
     if (!queryMessage) {
       return NextResponse.json({ error: "message 不可為空" }, { status: 400 });
     }
+
+    const contextualQuery = buildContextualQuery(queryMessage, history);
 
     const apiKey = process.env.GEMINI_API_KEY;
     if (!apiKey) {
@@ -103,7 +165,7 @@ export async function POST(request: Request) {
 
     const articles = (data ?? []) as KnowledgeArticle[];
     const terms = buildTerms([
-      queryMessage,
+      contextualQuery,
       analysisResult?.summary || "",
       analysisResult?.extracted?.issue || "",
       analysisResult?.extracted?.service_item || "",
@@ -124,7 +186,7 @@ export async function POST(request: Request) {
     }
 
     const guard = evaluateSandboxKnowledgeQueryGuard(
-      queryMessage,
+      contextualQuery,
       matched.map(({ article }) => ({
         title: article.title,
         category: article.category,
@@ -147,7 +209,7 @@ export async function POST(request: Request) {
 
     const context = matched
       .map(({ article }, idx) => {
-        const clipped = buildGuardedKnowledgeArticleSnippet(article, queryMessage, CONTENT_SNIPPET_LIMIT);
+        const clipped = buildGuardedKnowledgeArticleSnippet(article, contextualQuery, CONTENT_SNIPPET_LIMIT);
         return `資料 ${idx + 1}\n標題：${article.title}\n分類：${article.category}\n內容：${clipped}`;
       })
       .join("\n\n");
@@ -162,6 +224,8 @@ export async function POST(request: Request) {
 Knowledge Base 沙盒回答不要整段複製 KB；只回可回答的最小價格區間、追問缺少資訊、提醒現場評估、或建議就醫 / 轉人工。
 若資料不足或無法確認，請明確說「需要人工確認」，禁止編造。
 ${guard.prompt_instructions}
+
+Sandbox contextual query（只用於短暫上下文查詢）：${contextualQuery}
 
 客人問題：${queryMessage}
 

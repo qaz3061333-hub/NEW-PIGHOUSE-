@@ -40,6 +40,8 @@ type RescheduleReplyResult = {
 const confidencePercent = (value: number) => `${Math.round(Math.max(0, Math.min(1, value)) * 100)}%`;
 const DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 const TIME_PATTERN = /^([01]\d|2[0-3]):[0-5]\d$/;
+const SUPPLEMENTAL_MESSAGE_PATTERN =
+  /(\d+(?:[.,]\d+)?\s*(?:kg|公斤|g|公克)|油性|乾性|敏感|短毛|長毛|中和|板橋|很兇|會咬)/i;
 
 type CustomerRescheduleApiResult = {
   success: boolean;
@@ -102,6 +104,18 @@ function formatTaipei(value: string) {
 
 function isStructuredDateTime(preferredDate: string, preferredTime: string) {
   return DATE_PATTERN.test(preferredDate.trim()) && TIME_PATTERN.test(preferredTime.trim());
+}
+
+function isLikelyKnowledgeFollowUp(
+  message: string,
+  previousAnalysisResult: SandboxAnalyzeResult | null,
+  previousKnowledgeAnswer: SandboxKnowledgeAnswer | null,
+) {
+  const trimmed = message.trim();
+  if (!trimmed) return false;
+  if (previousAnalysisResult?.intent !== "knowledge_question" && !previousKnowledgeAnswer) return false;
+  if (/[?？]/.test(trimmed) && trimmed.length > 18) return false;
+  return trimmed.length <= 30 || SUPPLEMENTAL_MESSAGE_PATTERN.test(trimmed);
 }
 
 export default function ConversationLogsPage() {
@@ -361,6 +375,9 @@ export default function ConversationLogsPage() {
       return;
     }
 
+    const previousAnalysisResult = analysisResult;
+    const previousKnowledgeAnswer = knowledgeAnswer;
+
     setIsAnalyzing(true);
     setError("");
     setAnalysisResult(null);
@@ -397,7 +414,9 @@ export default function ConversationLogsPage() {
       return;
     }
 
-    if (gate.decision === "knowledge_candidate") {
+    const shouldContinueKnowledgeQuestion = isLikelyKnowledgeFollowUp(message, previousAnalysisResult, previousKnowledgeAnswer);
+
+    if (gate.decision === "knowledge_candidate" || shouldContinueKnowledgeQuestion) {
       const knowledgeOnlyResult: SandboxAnalyzeResult = {
         intent: "knowledge_question",
         confidence: 1,
@@ -425,7 +444,7 @@ export default function ConversationLogsPage() {
         },
       ]);
       setAutoKnowledgeQueryMessage(message);
-      const knowledgeResult = await runKnowledgeAnswer(message, knowledgeOnlyResult);
+      const knowledgeResult = await runKnowledgeAnswer(message, knowledgeOnlyResult, nextHistory);
       setAutoKnowledgeQueryMessage("");
       setChat((previous) => [
         ...previous,
@@ -577,6 +596,7 @@ export default function ConversationLogsPage() {
   async function runKnowledgeAnswer(
     message: string,
     currentAnalysisResult: SandboxAnalyzeResult | null,
+    history: SandboxHistoryMessage[] = [],
   ) {
     const trimmedMessage = message.trim();
     if (!trimmedMessage) {
@@ -592,7 +612,7 @@ export default function ConversationLogsPage() {
       const response = await fetch("/api/sandbox/knowledge-answer", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message: trimmedMessage, analysisResult: currentAnalysisResult }),
+        body: JSON.stringify({ message: trimmedMessage, analysisResult: currentAnalysisResult, history }),
       });
       const payload = (await response.json()) as { error?: string } & SandboxKnowledgeAnswer;
       if (!response.ok) {
@@ -630,7 +650,11 @@ export default function ConversationLogsPage() {
       return;
     }
     setAutoKnowledgeQueryMessage("");
-    await runKnowledgeAnswer(message, analysisResult);
+    const history: SandboxHistoryMessage[] = chat.map(({ role, content }) => ({ role, content }));
+    if (history.at(-1)?.content.trim() !== message.trim()) {
+      history.push({ role: "customer", content: message });
+    }
+    await runKnowledgeAnswer(message, analysisResult, history);
   }
 
   const knowledgeAssistIntent = analysisResult?.intent === "knowledge_question" || analysisResult?.intent === "abnormal_alert";
