@@ -414,7 +414,10 @@ export default function ConversationLogsPage() {
       return;
     }
 
-    const shouldContinueKnowledgeQuestion = isLikelyKnowledgeFollowUp(message, previousAnalysisResult, previousKnowledgeAnswer);
+    const canContinueKnowledgeQuestion =
+      gate.decision === "knowledge_candidate" || gate.decision === "allow_ai_analysis";
+    const shouldContinueKnowledgeQuestion =
+      canContinueKnowledgeQuestion && isLikelyKnowledgeFollowUp(message, previousAnalysisResult, previousKnowledgeAnswer);
 
     if (gate.decision === "knowledge_candidate" || shouldContinueKnowledgeQuestion) {
       const knowledgeOnlyResult: SandboxAnalyzeResult = {
