@@ -44,6 +44,9 @@ type KnowledgeAnswerRunResult = {
   needs_manual_reply?: boolean;
 };
 
+const KNOWLEDGE_MANUAL_REVIEW_CHAT_MESSAGE =
+  "這題涉及需人工確認的情境，我已產生 Knowledge Base 沙盒草稿供人員查看，請由人工確認後再回覆；若是健康異常，請優先建議就醫或由門市人員協助判斷。";
+
 const confidencePercent = (value: number) => `${Math.round(Math.max(0, Math.min(1, value)) * 100)}%`;
 const DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 const TIME_PATTERN = /^([01]\d|2[0-3]):[0-5]\d$/;
@@ -459,6 +462,8 @@ export default function ConversationLogsPage() {
       const assistantKnowledgeMessage =
         knowledgeResult.ok && knowledgeResult.hasKnowledge && knowledgeResult.answer
           ? knowledgeResult.answer
+          : knowledgeResult.ok && knowledgeResult.needs_manual_reply
+            ? KNOWLEDGE_MANUAL_REVIEW_CHAT_MESSAGE
           : "目前知識庫資料不足，已建立 Sandbox 知識庫補充建議，建議由人工確認。";
       setChat((previous) => [
         ...previous,
@@ -649,7 +654,7 @@ export default function ConversationLogsPage() {
       }
       return {
         ok: true,
-        hasKnowledge: matchedArticles.length > 0,
+        hasKnowledge: matchedArticles.length > 0 && !needsManualReply,
         answer,
         needs_manual_reply: needsManualReply,
       };
