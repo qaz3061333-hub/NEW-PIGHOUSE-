@@ -37,6 +37,13 @@ type RescheduleReplyResult = {
   staff_note: string;
 };
 
+type KnowledgeAnswerRunResult = {
+  ok: boolean;
+  hasKnowledge: boolean;
+  answer?: string;
+  needs_manual_reply?: boolean;
+};
+
 const confidencePercent = (value: number) => `${Math.round(Math.max(0, Math.min(1, value)) * 100)}%`;
 const DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 const TIME_PATTERN = /^([01]\d|2[0-3]):[0-5]\d$/;
@@ -449,14 +456,16 @@ export default function ConversationLogsPage() {
       setAutoKnowledgeQueryMessage(message);
       const knowledgeResult = await runKnowledgeAnswer(message, knowledgeOnlyResult, nextHistory);
       setAutoKnowledgeQueryMessage("");
+      const assistantKnowledgeMessage =
+        knowledgeResult.ok && knowledgeResult.hasKnowledge && knowledgeResult.answer
+          ? knowledgeResult.answer
+          : "目前知識庫資料不足，已建立 Sandbox 知識庫補充建議，建議由人工確認。";
       setChat((previous) => [
         ...previous,
         {
           id: `${Date.now()}-assistant`,
           role: "assistant",
-          content: knowledgeResult.ok && knowledgeResult.hasKnowledge
-            ? "已產生 Knowledge Base 沙盒回答草稿，請在下方確認。"
-            : "目前知識庫資料不足，已建立 Sandbox 知識庫補充建議，建議由人工確認。",
+          content: assistantKnowledgeMessage,
         },
       ]);
       setInputMessage("");
@@ -600,7 +609,7 @@ export default function ConversationLogsPage() {
     message: string,
     currentAnalysisResult: SandboxAnalyzeResult | null,
     history: SandboxHistoryMessage[] = [],
-  ) {
+  ): Promise<KnowledgeAnswerRunResult> {
     const trimmedMessage = message.trim();
     if (!trimmedMessage) {
       setKnowledgeError("找不到客人原始訊息，請重新輸入後再試。");
@@ -624,8 +633,9 @@ export default function ConversationLogsPage() {
       }
       const matchedArticles = payload.matched_articles || [];
       const needsManualReply = Boolean(payload.needs_manual_reply);
+      const answer = payload.answer || "";
       setKnowledgeAnswer({
-        answer: payload.answer,
+        answer,
         matched_articles: matchedArticles,
         needs_manual_reply: needsManualReply,
       });
@@ -637,7 +647,12 @@ export default function ConversationLogsPage() {
           reason: "知識庫查無足夠相關資料，建議補充。",
         });
       }
-      return { ok: true, hasKnowledge: matchedArticles.length > 0 && !needsManualReply };
+      return {
+        ok: true,
+        hasKnowledge: matchedArticles.length > 0,
+        answer,
+        needs_manual_reply: needsManualReply,
+      };
     } catch (error) {
       setKnowledgeError(`知識庫沙盒查詢失敗：${(error as Error).message}`);
       return { ok: false, hasKnowledge: false };
