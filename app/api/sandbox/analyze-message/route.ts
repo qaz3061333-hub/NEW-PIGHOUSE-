@@ -6,6 +6,9 @@ import {
   SandboxIntent,
   SandboxTimeStatus,
 } from "@/lib/sandbox";
+import type { SandboxAppointmentDraft, SandboxAppointmentAnalyzeResult } from "@/lib/sandboxAppointmentDraft";
+import { normalizeSandboxAppointmentExtracted } from "@/lib/sandboxAppointmentDraft";
+import { buildSandboxAppointmentPolicyPrompt, fetchActiveSandboxAppointmentPolicy } from "@/lib/sandboxAppointmentPolicy";
 
 const GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/models";
 const TAIWAN_TIMEZONE = "Asia/Taipei";
@@ -34,10 +37,11 @@ function normalizeTimeStatus(value: unknown): SandboxTimeStatus {
   return "unclear";
 }
 
-function normalizeResult(payload: unknown): SandboxAnalyzeResult {
+function normalizeResult(payload: unknown): SandboxAppointmentAnalyzeResult {
   const source = typeof payload === "object" && payload !== null ? (payload as Record<string, unknown>) : {};
   const extractedSource =
     typeof source.extracted === "object" && source.extracted !== null ? (source.extracted as Record<string, unknown>) : {};
+  const extracted = normalizeSandboxAppointmentExtracted(extractedSource);
 
   return {
     intent: normalizeIntent(source.intent),
@@ -52,12 +56,7 @@ function normalizeResult(payload: unknown): SandboxAnalyzeResult {
         : EMPTY_ANALYZE_RESULT.target_module,
     summary: typeof source.summary === "string" && source.summary.trim() ? source.summary.trim() : EMPTY_ANALYZE_RESULT.summary,
     extracted: {
-      customer_name: typeof extractedSource.customer_name === "string" ? extractedSource.customer_name : "",
-      service_item: typeof extractedSource.service_item === "string" ? extractedSource.service_item : "",
-      preferred_date: typeof extractedSource.preferred_date === "string" ? extractedSource.preferred_date : "",
-      preferred_time: typeof extractedSource.preferred_time === "string" ? extractedSource.preferred_time : "",
-      issue: typeof extractedSource.issue === "string" ? extractedSource.issue : "",
-      urgency: typeof extractedSource.urgency === "string" ? extractedSource.urgency : "",
+      ...extracted,
       time_status: normalizeTimeStatus(extractedSource.time_status),
       needs_clarification: extractedSource.needs_clarification === true,
     },
@@ -111,7 +110,12 @@ function normalizeHistory(value: unknown): SandboxHistoryMessage[] {
 
 export async function POST(request: Request) {
   try {
-    const { message, history } = (await request.json()) as { message?: string; history?: unknown };
+    const { message, history, gateDecision, appointmentDraft } = (await request.json()) as {
+      message?: string;
+      history?: unknown;
+      gateDecision?: string;
+      appointmentDraft?: Partial<SandboxAppointmentDraft>;
+    };
 
     if (!message || !message.trim()) {
       return NextResponse.json({ error: "請輸入要分析的客人訊息。" }, { status: 400 });
@@ -127,6 +131,25 @@ export async function POST(request: Request) {
     const taiwanNow = getTaiwanNowContext();
     const normalizedHistory = normalizeHistory(history);
     const recentHistory = normalizedHistory.slice(-MAX_HISTORY_LENGTH);
+    const appointmentPolicyContext = await fetchActiveSandboxAppointmentPolicy();
+    const appointmentPolicyPrompt = buildSandboxAppointmentPolicyPrompt(appointmentPolicyContext);
+    const appointmentDraftContext = appointmentDraft
+      ? JSON.stringify(
+          {
+            service_item: appointmentDraft.service_item || "",
+            pet_name: appointmentDraft.pet_name || "",
+            pet_type_or_breed: appointmentDraft.pet_type_or_breed || "",
+            preferred_date: appointmentDraft.preferred_date || "",
+            preferred_time: appointmentDraft.preferred_time || "",
+            owner_name: appointmentDraft.owner_name || "",
+            phone: appointmentDraft.phone || "",
+            customer_status: appointmentDraft.customer_status || "",
+            missing_fields: appointmentDraft.missing_fields || [],
+          },
+          null,
+          2,
+        )
+      : "（無）";
     const historyContext =
       recentHistory.length > 0
         ? recentHistory.map((item, index) => `${index + 1}. ${item.role === "customer" ? "客人" : "助理"}：${item.content}`).join("\n")
@@ -162,7 +185,24 @@ export async function POST(request: Request) {
 - 若時間資訊不足或不確定，time_status="unclear" 且 needs_clarification=true。
 - 僅在日期時間可直接用於預約時，time_status="valid" 且 needs_clarification=false。
 
+預約草稿規則：
+- current appointment draft 是本輪訊息之前已累積的沙盒草稿，請把它視為既有資料。
+- 若客人本輪只補充一個欄位（例如「是球球」），仍應沿用 current appointment draft 與 history 判斷為 appointment_request，並只補上新欄位。
+- 不要把空字串當作更正；只有客人明確提供新的非空欄位時才輸出該欄位。
+- 若客人明確改時間或更改資料，才輸出新的欄位值。
+- extracted.missing_fields 必須依 active appointment_policy 與 current appointment draft 判斷，不要寫成店家專屬固定規則。
+- customer_reply 必須基於 current appointment draft 加上本輪可抽取的新資料，不可重問已在草稿中的資料。
+- 未經門市確認前，不可說預約成功、已為您預約、已幫您保留、已安排、已確認預約、明天三點見，或任何讓客人以為預約已成立的話。
+
 最近沙盒對話紀錄（最多 ${MAX_HISTORY_LENGTH} 則，越後面越新）：
+Sandbox gate decision: ${gateDecision || "unknown"}
+
+current appointment draft:
+${appointmentDraftContext}
+
+Appointment policy:
+${appointmentPolicyPrompt}
+
 ${historyContext}
 
 你必須只輸出 JSON，禁止輸出任何 JSON 以外文字。
@@ -178,6 +218,12 @@ JSON schema：
     "service_item": "",
     "preferred_date": "",
     "preferred_time": "",
+    "pet_name": "",
+    "pet_type_or_breed": "",
+    "owner_name": "",
+    "phone": "",
+    "customer_status": "",
+    "missing_fields": [],
     "issue": "",
     "urgency": "",
     "time_status": "valid | past | unclear",

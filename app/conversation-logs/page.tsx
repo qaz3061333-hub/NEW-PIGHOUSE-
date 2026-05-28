@@ -19,6 +19,15 @@ import { evaluateSandboxServiceGate, SandboxGateDecision } from "@/lib/sandboxSe
 import { upsertSandboxKnowledgeGapEvent } from "@/lib/sandboxKnowledgeGapEvents";
 import { evaluateSandboxReplyPolicy } from "@/lib/sandboxReplyPolicy";
 import { evaluateSandboxArchivePolicy } from "@/lib/sandboxArchivePolicy";
+import {
+  buildSandboxAppointmentDraftReply,
+  EMPTY_SANDBOX_APPOINTMENT_DRAFT,
+  getSandboxAppointmentDraftRows,
+  isSandboxAppointmentDraftEmpty,
+  mergeSandboxAppointmentDraft,
+  SandboxAppointmentAnalyzeResult,
+  SandboxAppointmentDraft,
+} from "@/lib/sandboxAppointmentDraft";
 
 type ChatMessage = {
   id: string;
@@ -52,6 +61,7 @@ const DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 const TIME_PATTERN = /^([01]\d|2[0-3]):[0-5]\d$/;
 const SUPPLEMENTAL_MESSAGE_PATTERN =
   /(\d+(?:[.,]\d+)?\s*(?:kg|公斤|g|公克)|油性|乾性|敏感|短毛|長毛|中和|板橋|很兇|會咬)/i;
+const APPOINTMENT_TURN_PATTERN = /(預約|改約|約(?:明天|後天|今天|下週|週|星期|中午|下午|上午|晚上|\d)|明天|後天|今天|下週|週[一二三四五六日天]?|星期[一二三四五六日天]?|中午|下午|上午|晚上|\d{1,2}\s*(?::|：|點))/;
 
 type CustomerRescheduleApiResult = {
   success: boolean;
@@ -128,6 +138,10 @@ function isLikelyKnowledgeFollowUp(
   return trimmed.length <= 30 || SUPPLEMENTAL_MESSAGE_PATTERN.test(trimmed);
 }
 
+function isLikelyAppointmentTurn(message: string) {
+  return APPOINTMENT_TURN_PATTERN.test(message.trim());
+}
+
 export default function ConversationLogsPage() {
   const [logs, setLogs] = useState<ConversationLog[]>(mockConversationLogs);
   const [notice, setNotice] = useState<string>(isSupabaseConfigured ? "" : supabaseEnvWarning);
@@ -137,6 +151,7 @@ export default function ConversationLogsPage() {
   const [isCreatingSandboxRequest, setIsCreatingSandboxRequest] = useState(false);
   const [analysisResult, setAnalysisResult] = useState<SandboxAnalyzeResult | null>(null);
   const [chat, setChat] = useState<ChatMessage[]>([]);
+  const [appointmentDraft, setAppointmentDraft] = useState<SandboxAppointmentDraft>(EMPTY_SANDBOX_APPOINTMENT_DRAFT);
   const [sandboxRequestMessage, setSandboxRequestMessage] = useState("");
   const [sandboxAbnormalAlertMessage, setSandboxAbnormalAlertMessage] = useState("");
   const [appointmentSandboxEvents, setAppointmentSandboxEvents] = useState<SandboxConversationEvent[]>([]);
@@ -331,12 +346,28 @@ export default function ConversationLogsPage() {
   }
 
   const extractedRows = useMemo(() => {
-    const data = analysisResult?.extracted ?? EMPTY_ANALYZE_RESULT.extracted;
+    const data = analysisResult
+      ? (analysisResult as SandboxAppointmentAnalyzeResult).extracted
+      : {
+          ...EMPTY_ANALYZE_RESULT.extracted,
+          pet_name: "",
+          pet_type_or_breed: "",
+          owner_name: "",
+          phone: "",
+          customer_status: "",
+          missing_fields: [],
+        };
     return [
       ["customer_name", data.customer_name],
       ["service_item", data.service_item],
+      ["pet_name", data.pet_name || ""],
+      ["pet_type_or_breed", data.pet_type_or_breed || ""],
       ["preferred_date", data.preferred_date],
       ["preferred_time", data.preferred_time],
+      ["owner_name", data.owner_name || ""],
+      ["phone", data.phone || ""],
+      ["customer_status", data.customer_status || ""],
+      ["missing_fields", Array.isArray(data.missing_fields) ? data.missing_fields.join("、") : ""],
       ["issue", data.issue],
       ["urgency", data.urgency],
       ["time_status", data.time_status],
@@ -344,12 +375,15 @@ export default function ConversationLogsPage() {
     ] as Array<[string, string]>;
   }, [analysisResult]);
 
+  const appointmentDraftRows = useMemo(() => getSandboxAppointmentDraftRows(appointmentDraft), [appointmentDraft]);
+
   const canCreateSandboxRequest = useMemo(() => {
     if (!analysisResult || analysisResult.intent !== "appointment_request") return false;
-    const extracted = analysisResult.extracted;
+    const extracted = (analysisResult as SandboxAppointmentAnalyzeResult).extracted;
     if (extracted.needs_clarification || extracted.time_status !== "valid") return false;
-    return isStructuredDateTime(extracted.preferred_date, extracted.preferred_time);
-  }, [analysisResult]);
+    if (appointmentDraft.missing_fields.length > 0) return false;
+    return isStructuredDateTime(appointmentDraft.preferred_date, appointmentDraft.preferred_time);
+  }, [analysisResult, appointmentDraft]);
 
   function resolveSandboxRequestedAt(preferredDate: string, preferredTime: string) {
     if (!isStructuredDateTime(preferredDate, preferredTime)) return null;
@@ -427,7 +461,7 @@ export default function ConversationLogsPage() {
     const canContinueKnowledgeQuestion =
       gate.decision === "knowledge_candidate" || gate.decision === "allow_ai_analysis";
     const shouldContinueKnowledgeQuestion =
-      canContinueKnowledgeQuestion && isLikelyKnowledgeFollowUp(message, previousAnalysisResult, previousKnowledgeAnswer);
+      canContinueKnowledgeQuestion && !isLikelyAppointmentTurn(message) && isLikelyKnowledgeFollowUp(message, previousAnalysisResult, previousKnowledgeAnswer);
 
     if (gate.decision === "knowledge_candidate" || shouldContinueKnowledgeQuestion) {
       const knowledgeOnlyResult: SandboxAnalyzeResult = {
@@ -482,20 +516,33 @@ export default function ConversationLogsPage() {
       const response = await fetch("/api/sandbox/analyze-message", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message, history: nextHistory }),
+        body: JSON.stringify({ message, history: nextHistory, gateDecision: gate.decision, appointmentDraft }),
       });
 
-      const payload = (await response.json()) as { error?: string; result?: SandboxAnalyzeResult };
+      const payload = (await response.json()) as { error?: string; result?: SandboxAppointmentAnalyzeResult };
       const result = payload.result;
       if (!response.ok || !result) {
         setError(payload.error || "沙盒分析失敗，請稍後再試。");
         return;
       }
 
-      setAnalysisResult(result);
+      let resultForUi: SandboxAppointmentAnalyzeResult = result;
+      if (result.intent === "appointment_request") {
+        const mergedDraft = mergeSandboxAppointmentDraft(appointmentDraft, result.extracted);
+        setAppointmentDraft(mergedDraft);
+        resultForUi = {
+          ...result,
+          customer_reply: buildSandboxAppointmentDraftReply(result.customer_reply, mergedDraft, {
+            needsClarification: result.extracted.needs_clarification,
+            timeStatus: result.extracted.time_status,
+          }),
+        };
+      }
+
+      setAnalysisResult(resultForUi);
       setChat((previous) => [
         ...previous,
-        { id: `${Date.now()}-assistant`, role: "assistant", content: result.customer_reply },
+        { id: `${Date.now()}-assistant`, role: "assistant", content: resultForUi.customer_reply },
       ]);
       setInputMessage("");
     } catch (requestError) {
@@ -508,6 +555,7 @@ export default function ConversationLogsPage() {
   function clearSandboxConversation() {
     setChat([]);
     setAnalysisResult(null);
+    setAppointmentDraft(EMPTY_SANDBOX_APPOINTMENT_DRAFT);
     setSandboxRequestMessage("");
     setSandboxAbnormalAlertMessage("");
     setManualReplyTaskMessage("");
@@ -573,8 +621,7 @@ export default function ConversationLogsPage() {
     setSandboxRequestMessage("");
     setSandboxAbnormalAlertMessage("");
 
-    const extracted = analysisResult.extracted;
-    const requestedAt = resolveSandboxRequestedAt(extracted.preferred_date, extracted.preferred_time);
+    const requestedAt = resolveSandboxRequestedAt(appointmentDraft.preferred_date, appointmentDraft.preferred_time);
     if (!requestedAt) {
       setSandboxRequestMessage("建立失敗：無法解析為有效預約時間，請先修正日期與時間。");
       setIsCreatingSandboxRequest(false);
@@ -582,9 +629,9 @@ export default function ConversationLogsPage() {
     }
 
     const payload = {
-      owner_name: extracted.customer_name?.trim() || "Sandbox Customer",
-      service: extracted.service_item?.trim() || "Sandbox Service",
-      pet_name: "Sandbox Pet",
+      owner_name: appointmentDraft.owner_name?.trim() || "Sandbox Customer",
+      service: appointmentDraft.service_item?.trim() || "Sandbox Service",
+      pet_name: appointmentDraft.pet_name?.trim() || "Sandbox Pet",
       requested_at: requestedAt,
       status: "pending" as const,
       is_sandbox: true,
@@ -800,6 +847,24 @@ export default function ConversationLogsPage() {
             ))}
           </div>
         </div>
+
+        <div className="mt-4 rounded-lg border border-sky-200 bg-sky-50 p-4 text-sm text-sky-950">
+          <h3 className="font-semibold">Sandbox 預約草稿狀態</h3>
+          <p className="mt-1 text-sky-900">此區只顯示前端暫存的預約草稿，不寫入 Supabase，也不會送出 LINE。</p>
+          {isSandboxAppointmentDraftEmpty(appointmentDraft) ? (
+            <p className="mt-3 text-sky-800">目前尚未累積預約草稿。</p>
+          ) : (
+            <dl className="mt-3 grid gap-2 md:grid-cols-2">
+              {appointmentDraftRows.map(([key, value]) => (
+                <div key={key}>
+                  <dt className="font-medium">{key}</dt>
+                  <dd>{value}</dd>
+                </div>
+              ))}
+            </dl>
+          )}
+        </div>
+
         {gateDecision ? (
           <div className="mt-4 rounded-lg border border-emerald-200 bg-emerald-50 p-4 text-sm text-emerald-900">
             <h3 className="font-semibold">AI 分流閘門</h3>
