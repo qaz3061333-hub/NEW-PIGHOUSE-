@@ -605,7 +605,7 @@ export default function ConversationLogsPage() {
 
         if (shouldAskSandboxAppointmentWeightForQuote(message, mergedDraft)) {
           replyParts.push(buildSandboxAppointmentMissingWeightForQuoteReply());
-        } else if (hasSandboxAppointmentQuoteBasis(mergedDraft)) {
+        } else if (isSandboxAppointmentPriceQuestion(message) && hasSandboxAppointmentQuoteBasis(mergedDraft)) {
           const quoteResult = await runKnowledgeAnswer(buildSandboxAppointmentPriceQuery(mergedDraft), result, nextHistory);
           if (quoteResult.ok && quoteResult.answer) {
             replyParts.push(appendSandboxAppointmentQuoteDisclaimer(quoteResult.answer));

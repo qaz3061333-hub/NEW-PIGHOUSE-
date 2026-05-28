@@ -67,6 +67,17 @@ const FIELD_MATCHERS: FieldMatcher[] = [
   { field: "phone", defaultLabel: "聯絡電話", patterns: [/聯絡電話/, /電話/, /手機/] },
 ];
 
+const POLICY_NOTE_LABEL_PATTERNS = [
+  /^預約提醒$/,
+  /^取消規則$/,
+  /^報價規則$/,
+  /^禁止說法$/,
+  /^建議語氣$/,
+  /^注意事項$/,
+  /^安全邊界$/,
+  /^人工確認$/,
+];
+
 const SAFE_APPOINTMENT_NOTICE = "這還不是正式預約成功，需由門市人員確認後才算完成。";
 const ASK_PRICE_WEIGHT_REPLY =
   "如果需要我先幫您估報價，請補充寶貝目前體重大約幾公斤；如果只是送出預約申請，門市確認時也會再協助核對。";
@@ -129,13 +140,21 @@ export function findSandboxAppointmentFieldByLabel(label: string): SandboxAppoin
   return matcher ? { field: matcher.field, label: normalized || matcher.defaultLabel } : { field: "custom", label: normalized };
 }
 
-function parsePolicyLineField(line: string): SandboxAppointmentPolicyRequiredField | null {
+function isPolicyNoteLabel(label: string) {
+  return POLICY_NOTE_LABEL_PATTERNS.some((pattern) => pattern.test(label));
+}
+
+function parsePolicyLineField(line: string, options: { allowCustomFields: boolean }): SandboxAppointmentPolicyRequiredField | null {
   const stripped = stripListMarker(line);
   if (!stripped || lineLooksLikeSectionHeading(stripped)) return null;
   const [beforeColon] = stripped.split(/[：:]/);
   const label = normalizePolicyLabel(beforeColon || stripped);
   if (!label || label.length > 36) return null;
-  return findSandboxAppointmentFieldByLabel(label);
+  if (isPolicyNoteLabel(label)) return null;
+
+  const field = findSandboxAppointmentFieldByLabel(label);
+  if (field.field === "custom" && !options.allowCustomFields) return null;
+  return field;
 }
 
 export function parseSandboxAppointmentPolicyIntakeForms(context: SandboxAppointmentPolicyContext): SandboxAppointmentPolicyForms {
@@ -162,7 +181,7 @@ export function parseSandboxAppointmentPolicyIntakeForms(context: SandboxAppoint
     }
 
     if (!currentForm) continue;
-    const field = parsePolicyLineField(stripped);
+    const field = parsePolicyLineField(stripped, { allowCustomFields: true });
     if (field) currentForm.fields.push(field);
   }
 
@@ -175,7 +194,7 @@ export function parseSandboxAppointmentPolicyIntakeForms(context: SandboxAppoint
   const allFields = uniqueRequiredFields(
     context.article.content
       .split(/\r?\n/)
-      .map(parsePolicyLineField)
+      .map((line) => parsePolicyLineField(line, { allowCustomFields: false }))
       .filter((item): item is SandboxAppointmentPolicyRequiredField => item !== null),
   );
 
