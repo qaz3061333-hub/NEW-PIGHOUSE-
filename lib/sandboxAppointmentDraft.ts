@@ -51,7 +51,7 @@ const DRAFT_FIELD_LABELS: Array<[keyof Omit<SandboxAppointmentDraft, "missing_fi
 ];
 
 const COMMITTED_APPOINTMENT_PATTERN =
-  /(已(?:經)?(?:為您)?預約成功|已為您預約|已幫您保留|已安排|已確認預約|預約成功|預約已(?:成立|完成|確認)|已完成預約|明天三點見)/;
+  /(已(?:經)?(?:為您)?預約成功|已為您預約|已幫您保留|已保留|已安排|已確認預約|預約成功|預約已(?:成立|完成|確認)|已完成預約|(?:我們|門市|這邊)?確認(?:您|你)?預約|明天三點見)/;
 
 function asCleanString(value: unknown) {
   return typeof value === "string" ? value.trim() : "";
@@ -149,20 +149,17 @@ export function buildSandboxAppointmentDraftReply(
     })
     .filter(Boolean);
   const missingText = draft.missing_fields.length > 0 ? `請再補充：${draft.missing_fields.join("、")}。` : "";
-  const safetyText = "這只是預約需求，需由門市人員確認後才算完成。";
+  const safetyText = "目前還不是正式預約成功，需由門市人員確認後才算完成。";
   const hasCommittedLanguage = COMMITTED_APPOINTMENT_PATTERN.test(originalReply);
-  const needsFallback =
-    hasCommittedLanguage ||
-    !originalReply.trim() ||
-    (options.needsClarification === true && draft.missing_fields.length > 0 && !draft.missing_fields.every((field) => originalReply.includes(field)));
-
-  if (!needsFallback) {
-    return originalReply.includes("門市") || originalReply.includes("確認後") ? originalReply : `${originalReply} ${safetyText}`;
-  }
 
   if (options.timeStatus === "past") {
-    return `已收到預約需求，但指定時間似乎已經過去。${knownFields.length > 0 ? `目前已知道：${knownFields.join("、")}。` : ""}${missingText}${safetyText}`;
+    return `已收到預約需求，但指定時間似乎已經過去。${knownFields.length > 0 ? `目前已整理出：${knownFields.join("、")}。` : ""}${missingText}${safetyText}`;
   }
 
-  return `已收到預約需求。${knownFields.length > 0 ? `目前已知道：${knownFields.join("、")}。` : ""}${missingText}${safetyText}`;
+  if (hasCommittedLanguage || options.needsClarification === true || draft.missing_fields.length > 0 || knownFields.length > 0) {
+    const pendingText = draft.missing_fields.length === 0 ? "資料目前已較完整，可建立 status = pending 的沙盒預約申請。" : "";
+    return `已收到預約需求，已整理成預約申請草稿。${knownFields.length > 0 ? `目前已知道：${knownFields.join("、")}。` : ""}${missingText}${pendingText}${safetyText}`;
+  }
+
+  return `已收到預約需求，這會先作為預約申請草稿處理。${safetyText}`;
 }

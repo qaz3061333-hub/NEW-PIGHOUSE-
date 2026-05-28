@@ -26,6 +26,22 @@ type KnowledgeArticleRow = {
 
 const APPOINTMENT_POLICY_CATEGORY = "appointment_policy";
 
+export type SandboxAppointmentPolicyRequiredField = {
+  field: "service_item" | "pet_name" | "pet_type_or_breed" | "preferred_date" | "preferred_time" | "owner_name" | "phone" | "customer_status";
+  label: string;
+};
+
+const POLICY_FIELD_MATCHERS: Array<SandboxAppointmentPolicyRequiredField & { patterns: RegExp[] }> = [
+  { field: "service_item", label: "服務項目", patterns: [/服務項目/, /服務內容/, /項目/] },
+  { field: "pet_name", label: "寵物姓名", patterns: [/寵物姓名/, /寶貝.*(?:姓名|名字)/, /狗狗.*(?:姓名|名字)/, /毛孩.*(?:姓名|名字)/] },
+  { field: "pet_type_or_breed", label: "品種/類型", patterns: [/品種/, /犬種/, /類型/] },
+  { field: "preferred_date", label: "希望日期", patterns: [/希望日期/, /預約日期/, /日期/] },
+  { field: "preferred_time", label: "希望時間", patterns: [/希望時間/, /預約時間/, /時段/, /時間/] },
+  { field: "owner_name", label: "飼主姓名", patterns: [/飼主姓名/, /主人姓名/, /客人姓名/, /聯絡人姓名/] },
+  { field: "phone", label: "聯絡電話", patterns: [/聯絡電話/, /電話/, /手機/] },
+  { field: "customer_status", label: "新客或舊客", patterns: [/新客/, /舊客/, /新舊客/, /是否.*(?:新客|舊客)/] },
+];
+
 function compactPolicyContent(content: string) {
   return content.trim().replace(/\n{3,}/g, "\n\n").slice(0, 4000);
 }
@@ -98,4 +114,16 @@ Never tell the customer the appointment is successful, reserved, arranged, confi
 
 appointment_policy status: ${context.status}
 reason: ${context.reason}`;
+}
+
+export function getSandboxAppointmentPolicyRequiredFields(
+  context: SandboxAppointmentPolicyContext,
+): SandboxAppointmentPolicyRequiredField[] {
+  if (context.status !== "active") return [];
+
+  const content = context.article.content;
+  return POLICY_FIELD_MATCHERS.filter((item) => item.patterns.some((pattern) => pattern.test(content))).map(({ field, label }) => ({
+    field,
+    label,
+  }));
 }
