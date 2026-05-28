@@ -394,8 +394,9 @@ JSON schema：
       const extractedWithStructuredTime = normalizeAppointmentTimeFields(message.trim(), normalizedResult.extracted, taiwanNow);
       const draftForMissingCheck = mergeSandboxAppointmentDraft(coerceAppointmentDraft(appointmentDraft), extractedWithStructuredTime);
       const requiredFields = getSandboxAppointmentPolicyRequiredFields(appointmentPolicyContext);
-      const policyMissingFields =
-        requiredFields.length > 0 ? requiredFields.filter((item) => !draftForMissingCheck[item.field]).map((item) => item.label) : extractedWithStructuredTime.missing_fields || [];
+      const shouldUpdateMissingFields = requiredFields.length > 0 || Array.isArray(extractedWithStructuredTime.missing_fields);
+      const nextMissingFields =
+        requiredFields.length > 0 ? requiredFields.filter((item) => !draftForMissingCheck[item.field]).map((item) => item.label) : extractedWithStructuredTime.missing_fields;
 
       return NextResponse.json({
         result: {
@@ -403,8 +404,10 @@ JSON schema：
           target_module: "Appointment Requests",
           extracted: {
             ...extractedWithStructuredTime,
-            missing_fields: policyMissingFields,
-            needs_clarification: policyMissingFields.length > 0 || extractedWithStructuredTime.time_status !== "valid",
+            ...(shouldUpdateMissingFields ? { missing_fields: nextMissingFields || [] } : {}),
+            needs_clarification:
+              (shouldUpdateMissingFields ? (nextMissingFields || []).length > 0 : extractedWithStructuredTime.needs_clarification) ||
+              extractedWithStructuredTime.time_status !== "valid",
           },
         },
       });

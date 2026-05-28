@@ -51,7 +51,7 @@ const DRAFT_FIELD_LABELS: Array<[keyof Omit<SandboxAppointmentDraft, "missing_fi
 ];
 
 const COMMITTED_APPOINTMENT_PATTERN =
-  /(已(?:經)?(?:為您)?預約成功|已為您預約|已幫您保留|已保留|已安排|已確認預約|預約成功|預約已(?:成立|完成|確認)|已完成預約|(?:我們|門市|這邊)?確認(?:您|你)?預約|明天三點見)/;
+  /(已(?:經)?(?:為您)?預約|已(?:經)?(?:為您)?預約成功|已幫您保留|已為您保留|已保留|已安排|已為您安排|已幫您安排|已確認預約|預約成功|預約已(?:成立|完成|確認)|已完成預約|(?:我們|門市|這邊)?確認(?:您|你)?預約|(?:今天|明天|後天|到時候).{0,6}見)/;
 
 function asCleanString(value: unknown) {
   return typeof value === "string" ? value.trim() : "";
@@ -68,7 +68,7 @@ function uniqueStrings(values: string[]) {
 
 export function normalizeSandboxAppointmentExtracted(value: unknown): SandboxAppointmentExtracted {
   const source = typeof value === "object" && value !== null ? (value as Record<string, unknown>) : {};
-  return {
+  const normalized: SandboxAppointmentExtracted = {
     customer_name: asCleanString(source.customer_name),
     service_item: asCleanString(source.service_item),
     preferred_date: asCleanString(source.preferred_date),
@@ -82,8 +82,13 @@ export function normalizeSandboxAppointmentExtracted(value: unknown): SandboxApp
     owner_name: asCleanString(source.owner_name),
     phone: asCleanString(source.phone),
     customer_status: asCleanString(source.customer_status),
-    missing_fields: asStringList(source.missing_fields),
   };
+
+  if (Object.prototype.hasOwnProperty.call(source, "missing_fields")) {
+    normalized.missing_fields = asStringList(source.missing_fields);
+  }
+
+  return normalized;
 }
 
 export function mergeSandboxAppointmentDraft(
