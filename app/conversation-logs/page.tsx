@@ -28,6 +28,15 @@ import {
   SandboxAppointmentAnalyzeResult,
   SandboxAppointmentDraft,
 } from "@/lib/sandboxAppointmentDraft";
+import type { SandboxAppointmentPolicyContext } from "@/lib/sandboxAppointmentPolicy";
+import {
+  appendSandboxAppointmentQuoteDisclaimer,
+  buildSandboxAppointmentMissingWeightForQuoteReply,
+  buildSandboxAppointmentPriceQuery,
+  hasSandboxAppointmentQuoteBasis,
+  isSandboxAppointmentPriceQuestion,
+  shouldAskSandboxAppointmentWeightForQuote,
+} from "@/lib/sandboxAppointmentIntakeForm";
 
 type ChatMessage = {
   id: string;
@@ -352,9 +361,12 @@ export default function ConversationLogsPage() {
           ...EMPTY_ANALYZE_RESULT.extracted,
           pet_name: "",
           pet_type_or_breed: "",
+          pet_weight: "",
           owner_name: "",
           phone: "",
           customer_status: "",
+          health_notes: "",
+          custom_fields: {},
           missing_fields: [],
         };
     return [
@@ -362,11 +374,14 @@ export default function ConversationLogsPage() {
       ["service_item", data.service_item],
       ["pet_name", data.pet_name || ""],
       ["pet_type_or_breed", data.pet_type_or_breed || ""],
+      ["pet_weight", data.pet_weight || ""],
       ["preferred_date", data.preferred_date],
       ["preferred_time", data.preferred_time],
       ["owner_name", data.owner_name || ""],
       ["phone", data.phone || ""],
       ["customer_status", data.customer_status || ""],
+      ["health_notes", data.health_notes || ""],
+      ["custom_fields", data.custom_fields ? JSON.stringify(data.custom_fields) : ""],
       ["missing_fields", Array.isArray(data.missing_fields) ? data.missing_fields.join("、") : ""],
       ["issue", data.issue],
       ["urgency", data.urgency],
@@ -463,6 +478,50 @@ export default function ConversationLogsPage() {
     const shouldContinueKnowledgeQuestion =
       canContinueKnowledgeQuestion && !isLikelyAppointmentTurn(message) && isLikelyKnowledgeFollowUp(message, previousAnalysisResult, previousKnowledgeAnswer);
 
+    if (gate.decision === "knowledge_candidate" && isSandboxAppointmentPriceQuestion(message) && !isSandboxAppointmentDraftEmpty(appointmentDraft)) {
+      const priceFollowUpResult: SandboxAnalyzeResult = {
+        intent: "knowledge_question",
+        confidence: 1,
+        target_module: "Knowledge Base",
+        summary: `預約草稿中的報價追問：${message}`,
+        customer_reply: "這題需要依目前預約草稿查詢 Knowledge Base，不會直接由 AI 自行回答。",
+        extracted: {
+          customer_name: "",
+          service_item: appointmentDraft.service_item,
+          preferred_date: appointmentDraft.preferred_date,
+          preferred_time: appointmentDraft.preferred_time,
+          issue: message,
+          urgency: "",
+          time_status: "unclear",
+          needs_clarification: false,
+        },
+      };
+
+      setAnalysisResult(priceFollowUpResult);
+      let assistantPriceReply = "";
+      if (shouldAskSandboxAppointmentWeightForQuote(message, appointmentDraft)) {
+        assistantPriceReply = buildSandboxAppointmentMissingWeightForQuoteReply();
+      } else if (hasSandboxAppointmentQuoteBasis(appointmentDraft)) {
+        const quoteResult = await runKnowledgeAnswer(buildSandboxAppointmentPriceQuery(appointmentDraft), priceFollowUpResult, nextHistory);
+        assistantPriceReply =
+          quoteResult.ok && quoteResult.answer
+            ? appendSandboxAppointmentQuoteDisclaimer(quoteResult.answer)
+            : "目前知識庫資料不足，建議由人工確認報價。";
+      }
+
+      setChat((previous) => [
+        ...previous,
+        {
+          id: `${Date.now()}-assistant`,
+          role: "assistant",
+          content: assistantPriceReply || "目前需要先補齊預約草稿資料，才能協助估價。",
+        },
+      ]);
+      setInputMessage("");
+      setIsAnalyzing(false);
+      return;
+    }
+
     if (gate.decision === "knowledge_candidate" || shouldContinueKnowledgeQuestion) {
       const knowledgeOnlyResult: SandboxAnalyzeResult = {
         intent: "knowledge_question",
@@ -519,7 +578,11 @@ export default function ConversationLogsPage() {
         body: JSON.stringify({ message, history: nextHistory, gateDecision: gate.decision, appointmentDraft }),
       });
 
-      const payload = (await response.json()) as { error?: string; result?: SandboxAppointmentAnalyzeResult };
+      const payload = (await response.json()) as {
+        error?: string;
+        result?: SandboxAppointmentAnalyzeResult;
+        appointmentPolicyContext?: SandboxAppointmentPolicyContext;
+      };
       const result = payload.result;
       if (!response.ok || !result) {
         setError(payload.error || "沙盒分析失敗，請稍後再試。");
@@ -528,14 +591,30 @@ export default function ConversationLogsPage() {
 
       let resultForUi: SandboxAppointmentAnalyzeResult = result;
       if (result.intent === "appointment_request") {
+        const previousDraft = appointmentDraft;
         const mergedDraft = mergeSandboxAppointmentDraft(appointmentDraft, result.extracted);
         setAppointmentDraft(mergedDraft);
-        resultForUi = {
-          ...result,
-          customer_reply: buildSandboxAppointmentDraftReply(result.customer_reply, mergedDraft, {
+        const replyParts = [
+          buildSandboxAppointmentDraftReply(result.customer_reply, mergedDraft, {
             needsClarification: result.extracted.needs_clarification,
             timeStatus: result.extracted.time_status,
+            policyContext: payload.appointmentPolicyContext,
+            previousDraft,
           }),
+        ];
+
+        if (shouldAskSandboxAppointmentWeightForQuote(message, mergedDraft)) {
+          replyParts.push(buildSandboxAppointmentMissingWeightForQuoteReply());
+        } else if (hasSandboxAppointmentQuoteBasis(mergedDraft)) {
+          const quoteResult = await runKnowledgeAnswer(buildSandboxAppointmentPriceQuery(mergedDraft), result, nextHistory);
+          if (quoteResult.ok && quoteResult.answer) {
+            replyParts.push(appendSandboxAppointmentQuoteDisclaimer(quoteResult.answer));
+          }
+        }
+
+        resultForUi = {
+          ...result,
+          customer_reply: replyParts.filter(Boolean).join("\n\n"),
         };
       }
 
@@ -837,7 +916,7 @@ export default function ConversationLogsPage() {
             {chat.map((message) => (
               <div key={message.id} className={`flex ${message.role === "customer" ? "justify-end" : "justify-start"}`}>
                 <div
-                  className={`max-w-[85%] rounded-2xl px-3 py-2 text-sm ${
+                  className={`max-w-[85%] whitespace-pre-wrap rounded-2xl px-3 py-2 text-sm ${
                     message.role === "customer" ? "bg-emerald-500 text-white" : "bg-white text-slate-800"
                   }`}
                 >
