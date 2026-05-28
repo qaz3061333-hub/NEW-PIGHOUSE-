@@ -11,8 +11,12 @@ import { EMPTY_SANDBOX_APPOINTMENT_DRAFT, mergeSandboxAppointmentDraft, normaliz
 import {
   buildSandboxAppointmentPolicyPrompt,
   fetchActiveSandboxAppointmentPolicy,
-  getSandboxAppointmentPolicyRequiredFields,
 } from "@/lib/sandboxAppointmentPolicy";
+import {
+  extractSandboxAppointmentFieldsFromMessage,
+  getMissingSandboxAppointmentPolicyFields,
+  normalizeSandboxAppointmentCustomerStatus,
+} from "@/lib/sandboxAppointmentIntakeForm";
 
 const GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/models";
 const TAIWAN_TIMEZONE = "Asia/Taipei";
@@ -203,11 +207,14 @@ function coerceAppointmentDraft(value: Partial<SandboxAppointmentDraft> | undefi
     service_item: value?.service_item || "",
     pet_name: value?.pet_name || "",
     pet_type_or_breed: value?.pet_type_or_breed || "",
+    pet_weight: value?.pet_weight || "",
     preferred_date: value?.preferred_date || "",
     preferred_time: value?.preferred_time || "",
     owner_name: value?.owner_name || "",
     phone: value?.phone || "",
     customer_status: value?.customer_status || "",
+    health_notes: value?.health_notes || "",
+    custom_fields: value?.custom_fields && typeof value.custom_fields === "object" ? value.custom_fields : {},
     missing_fields: Array.isArray(value?.missing_fields) ? value.missing_fields : [],
     last_updated_at: value?.last_updated_at || "",
   };
@@ -259,11 +266,14 @@ export async function POST(request: Request) {
             service_item: appointmentDraft.service_item || "",
             pet_name: appointmentDraft.pet_name || "",
             pet_type_or_breed: appointmentDraft.pet_type_or_breed || "",
+            pet_weight: appointmentDraft.pet_weight || "",
             preferred_date: appointmentDraft.preferred_date || "",
             preferred_time: appointmentDraft.preferred_time || "",
             owner_name: appointmentDraft.owner_name || "",
             phone: appointmentDraft.phone || "",
             customer_status: appointmentDraft.customer_status || "",
+            health_notes: appointmentDraft.health_notes || "",
+            custom_fields: appointmentDraft.custom_fields || {},
             missing_fields: appointmentDraft.missing_fields || [],
           },
           null,
@@ -312,6 +322,10 @@ export async function POST(request: Request) {
 - 若客人明確改時間或更改資料，才輸出新的欄位值。
 - extracted.missing_fields 必須依 active appointment_policy 與 current appointment draft 判斷，不要寫成店家專屬固定規則。
 - customer_reply 必須基於 current appointment draft 加上本輪可抽取的新資料，不可重問已在草稿中的資料。
+- appointment_policy 若有新客 / 舊客格式，required fields 必須依客人身分分流；舊客在 sandbox 先默認資料存在，不需要查 customer database。
+- 新客若 policy 沒有要求飼主姓名，不要要求 owner_name / 飼主姓名。
+- 不要主動要求毛長 / 毛況，除非 active appointment_policy 明確要求。
+- 若客人只問價格且沒有明確預約，intent 應為 knowledge_question，不要進預約表單。
 - 未經門市確認前，不可說預約成功、已為您預約、已幫您保留、已安排、已確認預約、明天三點見，或任何讓客人以為預約已成立的話。
 
 最近沙盒對話紀錄（最多 ${MAX_HISTORY_LENGTH} 則，越後面越新）：
@@ -340,9 +354,12 @@ JSON schema：
     "preferred_time": "",
     "pet_name": "",
     "pet_type_or_breed": "",
+    "pet_weight": "",
     "owner_name": "",
     "phone": "",
     "customer_status": "",
+    "health_notes": "",
+    "custom_fields": {},
     "missing_fields": [],
     "issue": "",
     "urgency": "",
@@ -391,14 +408,25 @@ JSON schema：
 
     const normalizedResult = normalizeResult(parsed);
     if (normalizedResult.intent === "appointment_request") {
-      const extractedWithStructuredTime = normalizeAppointmentTimeFields(message.trim(), normalizedResult.extracted, taiwanNow);
+      const ruleExtracted = extractSandboxAppointmentFieldsFromMessage(message.trim(), appointmentPolicyContext);
+      const mergedExtracted = normalizeSandboxAppointmentExtracted({
+        ...normalizedResult.extracted,
+        ...ruleExtracted,
+        custom_fields: {
+          ...(normalizedResult.extracted.custom_fields || {}),
+          ...(ruleExtracted.custom_fields || {}),
+        },
+      });
+      const extractedWithStructuredTime = normalizeAppointmentTimeFields(message.trim(), mergedExtracted, taiwanNow);
       const draftForMissingCheck = mergeSandboxAppointmentDraft(coerceAppointmentDraft(appointmentDraft), extractedWithStructuredTime);
-      const requiredFields = getSandboxAppointmentPolicyRequiredFields(appointmentPolicyContext);
-      const shouldUpdateMissingFields = requiredFields.length > 0 || Array.isArray(extractedWithStructuredTime.missing_fields);
+      const customerStatus = normalizeSandboxAppointmentCustomerStatus(draftForMissingCheck.customer_status);
+      const missingPolicyFields = getMissingSandboxAppointmentPolicyFields(appointmentPolicyContext, draftForMissingCheck);
+      const shouldUpdateMissingFields = appointmentPolicyContext.status === "active" || Array.isArray(extractedWithStructuredTime.missing_fields);
       const nextMissingFields =
-        requiredFields.length > 0 ? requiredFields.filter((item) => !draftForMissingCheck[item.field]).map((item) => item.label) : extractedWithStructuredTime.missing_fields;
+        appointmentPolicyContext.status === "active" ? missingPolicyFields.map((item) => item.label) : extractedWithStructuredTime.missing_fields;
 
       return NextResponse.json({
+        appointmentPolicyContext,
         result: {
           ...normalizedResult,
           target_module: "Appointment Requests",
@@ -407,13 +435,14 @@ JSON schema：
             ...(shouldUpdateMissingFields ? { missing_fields: nextMissingFields || [] } : {}),
             needs_clarification:
               (shouldUpdateMissingFields ? (nextMissingFields || []).length > 0 : extractedWithStructuredTime.needs_clarification) ||
+              customerStatus === "unknown" ||
               extractedWithStructuredTime.time_status !== "valid",
           },
         },
       });
     }
 
-    return NextResponse.json({ result: normalizedResult });
+    return NextResponse.json({ result: normalizedResult, appointmentPolicyContext });
   } catch (error) {
     return NextResponse.json({ error: `分析失敗：${(error as Error).message}` }, { status: 500 });
   }

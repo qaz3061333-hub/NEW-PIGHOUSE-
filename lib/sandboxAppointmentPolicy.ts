@@ -1,4 +1,9 @@
 import { createClient } from "@supabase/supabase-js";
+import {
+  getSandboxAppointmentPolicyRequiredFields as getSandboxAppointmentIntakeRequiredFields,
+  type SandboxAppointmentCustomerStatus,
+  type SandboxAppointmentPolicyRequiredField,
+} from "@/lib/sandboxAppointmentIntakeForm";
 
 export type SandboxAppointmentPolicyContext =
   | {
@@ -25,22 +30,6 @@ type KnowledgeArticleRow = {
 };
 
 const APPOINTMENT_POLICY_CATEGORY = "appointment_policy";
-
-export type SandboxAppointmentPolicyRequiredField = {
-  field: "service_item" | "pet_name" | "pet_type_or_breed" | "preferred_date" | "preferred_time" | "owner_name" | "phone" | "customer_status";
-  label: string;
-};
-
-const POLICY_FIELD_MATCHERS: Array<SandboxAppointmentPolicyRequiredField & { patterns: RegExp[] }> = [
-  { field: "service_item", label: "服務項目", patterns: [/服務項目/, /服務內容/, /項目/] },
-  { field: "pet_name", label: "寵物姓名", patterns: [/寵物姓名/, /寶貝.*(?:姓名|名字)/, /狗狗.*(?:姓名|名字)/, /毛孩.*(?:姓名|名字)/] },
-  { field: "pet_type_or_breed", label: "品種/類型", patterns: [/品種/, /犬種/, /類型/] },
-  { field: "preferred_date", label: "希望日期", patterns: [/希望日期/, /預約日期/, /日期/] },
-  { field: "preferred_time", label: "希望時間", patterns: [/希望時間/, /預約時間/, /時段/, /時間/] },
-  { field: "owner_name", label: "飼主姓名", patterns: [/飼主姓名/, /主人姓名/, /客人姓名/, /聯絡人姓名/] },
-  { field: "phone", label: "聯絡電話", patterns: [/聯絡電話/, /電話/, /手機/] },
-  { field: "customer_status", label: "新客或舊客", patterns: [/新客/, /舊客/, /新舊客/, /是否.*(?:新客|舊客)/] },
-];
 
 function compactPolicyContent(content: string) {
   return content.trim().replace(/\n{3,}/g, "\n\n").slice(0, 4000);
@@ -92,8 +81,12 @@ export function buildSandboxAppointmentPolicyPrompt(context: SandboxAppointmentP
     return `Active Knowledge Base appointment_policy is available.
 Use this policy as the source for appointment required information and customer-facing appointment rules.
 Do not invent required fields that are not described in this policy.
-For appointment_request, fill extracted.missing_fields using only policy-required information that is still missing after considering the current appointment draft and recent history.
-If any policy-required information is missing, keep intent as appointment_request when appropriate, set extracted.needs_clarification=true, and ask for the missing items.
+For appointment_request, use the new-customer / returning-customer intake formats from this policy as the source of required information.
+If the customer has not said whether they are new or returning, ask them to choose new customer or returning customer and provide both policy formats.
+If the customer says they are a new customer, use only the policy's new-customer format.
+If the customer says they are a returning customer, use only the policy's returning-customer format. In sandbox, assume returning-customer data exists and do not require a real customer database lookup.
+For appointment_request, fill extracted.missing_fields using only policy-required information for the applicable format that is still missing after considering the current appointment draft and recent history.
+If any policy-required information is missing, keep intent as appointment_request when appropriate, set extracted.needs_clarification=true, and ask only for the missing items in natural Traditional Chinese.
 Even if the policy is permissive, never tell the customer the appointment is successful, reserved, arranged, confirmed, or completed.
 
 appointment_policy article:
@@ -118,12 +111,7 @@ reason: ${context.reason}`;
 
 export function getSandboxAppointmentPolicyRequiredFields(
   context: SandboxAppointmentPolicyContext,
+  status: SandboxAppointmentCustomerStatus = "unknown",
 ): SandboxAppointmentPolicyRequiredField[] {
-  if (context.status !== "active") return [];
-
-  const content = context.article.content;
-  return POLICY_FIELD_MATCHERS.filter((item) => item.patterns.some((pattern) => pattern.test(content))).map(({ field, label }) => ({
-    field,
-    label,
-  }));
+  return getSandboxAppointmentIntakeRequiredFields(context, status);
 }

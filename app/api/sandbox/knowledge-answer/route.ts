@@ -4,6 +4,7 @@ import {
   buildGuardedKnowledgeArticleSnippet,
   evaluateSandboxKnowledgeQueryGuard,
 } from "@/lib/sandboxKnowledgeQueryGuard";
+import { SANDBOX_APPOINTMENT_QUOTE_DISCLAIMER } from "@/lib/sandboxAppointmentIntakeForm";
 
 type KnowledgeAnswerRequest = {
   message?: string;
@@ -222,6 +223,7 @@ export async function POST(request: Request) {
 
 請只根據下列知識庫資料回答客人，使用繁體中文、語氣友善、內容精簡。
 Knowledge Base 沙盒回答不要整段複製 KB；只回可回答的最小價格區間、追問缺少資訊、提醒現場評估、或建議就醫 / 轉人工。
+若回答包含價格、費用、收費、報價或估價區間，必須附上這句提醒：「${SANDBOX_APPOINTMENT_QUOTE_DISCLAIMER}」
 若資料不足或無法確認，請明確說「需要人工確認」，禁止編造。
 ${guard.prompt_instructions}
 
