@@ -6,6 +6,11 @@ import {
   SandboxIntent,
   SandboxTimeStatus,
 } from "@/lib/sandbox";
+import {
+  buildSandboxAppointmentPolicyPrompt,
+  fetchActiveSandboxAppointmentPolicy,
+  sanitizeSandboxAppointmentResult,
+} from "@/lib/sandboxAppointmentPolicy";
 
 const GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/models";
 const TAIWAN_TIMEZONE = "Asia/Taipei";
@@ -111,7 +116,11 @@ function normalizeHistory(value: unknown): SandboxHistoryMessage[] {
 
 export async function POST(request: Request) {
   try {
-    const { message, history } = (await request.json()) as { message?: string; history?: unknown };
+    const { message, history, gateDecision } = (await request.json()) as {
+      message?: string;
+      history?: unknown;
+      gateDecision?: string;
+    };
 
     if (!message || !message.trim()) {
       return NextResponse.json({ error: "請輸入要分析的客人訊息。" }, { status: 400 });
@@ -127,6 +136,8 @@ export async function POST(request: Request) {
     const taiwanNow = getTaiwanNowContext();
     const normalizedHistory = normalizeHistory(history);
     const recentHistory = normalizedHistory.slice(-MAX_HISTORY_LENGTH);
+    const appointmentPolicyContext = await fetchActiveSandboxAppointmentPolicy();
+    const appointmentPolicyPrompt = buildSandboxAppointmentPolicyPrompt(appointmentPolicyContext);
     const historyContext =
       recentHistory.length > 0
         ? recentHistory.map((item, index) => `${index + 1}. ${item.role === "customer" ? "客人" : "助理"}：${item.content}`).join("\n")
@@ -163,6 +174,10 @@ export async function POST(request: Request) {
 - 僅在日期時間可直接用於預約時，time_status="valid" 且 needs_clarification=false。
 
 最近沙盒對話紀錄（最多 ${MAX_HISTORY_LENGTH} 則，越後面越新）：
+Appointment policy guard:
+Sandbox gate decision: ${gateDecision || "unknown"}
+${appointmentPolicyPrompt}
+
 ${historyContext}
 
 你必須只輸出 JSON，禁止輸出任何 JSON 以外文字。
@@ -223,7 +238,7 @@ JSON schema：
       return NextResponse.json({ error: `Gemini 回傳格式不是有效 JSON（model: ${model}）` }, { status: 502 });
     }
 
-    return NextResponse.json({ result: normalizeResult(parsed) });
+    return NextResponse.json({ result: sanitizeSandboxAppointmentResult(normalizeResult(parsed), appointmentPolicyContext) });
   } catch (error) {
     return NextResponse.json({ error: `分析失敗：${(error as Error).message}` }, { status: 500 });
   }

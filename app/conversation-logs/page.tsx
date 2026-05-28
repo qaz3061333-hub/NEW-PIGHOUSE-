@@ -482,7 +482,7 @@ export default function ConversationLogsPage() {
       const response = await fetch("/api/sandbox/analyze-message", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message, history: nextHistory }),
+        body: JSON.stringify({ message, history: nextHistory, gateDecision: gate.decision }),
       });
 
       const payload = (await response.json()) as { error?: string; result?: SandboxAnalyzeResult };
