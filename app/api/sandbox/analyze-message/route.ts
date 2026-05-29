@@ -16,7 +16,10 @@ import {
   extractSandboxAppointmentFieldsFromMessage,
   getMissingSandboxAppointmentPolicyFields,
   normalizeSandboxAppointmentCustomerStatus,
+  parseSandboxAppointmentPolicyIntakeForms,
 } from "@/lib/sandboxAppointmentIntakeForm";
+import type { SandboxAppointmentPolicyDebug } from "@/lib/sandboxAppointmentPolicy";
+import type { SandboxConversationFlow } from "@/lib/sandboxConversationFlow";
 
 const GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/models";
 const TAIWAN_TIMEZONE = "Asia/Taipei";
@@ -235,13 +238,40 @@ function normalizeHistory(value: unknown): SandboxHistoryMessage[] {
     .filter((item): item is SandboxHistoryMessage => item !== null);
 }
 
+function buildAppointmentPolicyDebug(context: Awaited<ReturnType<typeof fetchActiveSandboxAppointmentPolicy>>): SandboxAppointmentPolicyDebug {
+  const parsed = parseSandboxAppointmentPolicyIntakeForms(context);
+  const hasPolicy = context.status === "active" || context.status === "fallback_used";
+  const parsedForms = parsed.forms.map((form) => form.status);
+  const parsedRequiredFields = Array.from(new Set(parsed.forms.flatMap((form) => form.fields.map((field) => field.label))));
+  const appointmentPolicyStatus: SandboxAppointmentPolicyDebug["appointment_policy_status"] =
+    hasPolicy && parsed.forms.length === 0 ? "parse_failed" : context.status;
+  const reason =
+    appointmentPolicyStatus === "parse_failed"
+      ? "policy active but intake form parse failed"
+      : context.status === "fallback_used"
+        ? context.reason || "category mismatch fallback used"
+        : "reason" in context
+          ? context.reason || ""
+          : "";
+
+  return {
+    appointment_policy_status: appointmentPolicyStatus,
+    matched_policy_title: hasPolicy ? context.article.title : null,
+    matched_policy_category: hasPolicy ? context.article.category : null,
+    parsed_forms: parsedForms,
+    parsed_required_fields: parsedRequiredFields,
+    reason,
+  };
+}
+
 export async function POST(request: Request) {
   try {
-    const { message, history, gateDecision, appointmentDraft } = (await request.json()) as {
+    const { message, history, gateDecision, appointmentDraft, flowHint } = (await request.json()) as {
       message?: string;
       history?: unknown;
       gateDecision?: string;
       appointmentDraft?: Partial<SandboxAppointmentDraft>;
+      flowHint?: SandboxConversationFlow;
     };
 
     if (!message || !message.trim()) {
@@ -259,6 +289,7 @@ export async function POST(request: Request) {
     const normalizedHistory = normalizeHistory(history);
     const recentHistory = normalizedHistory.slice(-MAX_HISTORY_LENGTH);
     const appointmentPolicyContext = await fetchActiveSandboxAppointmentPolicy();
+    const appointmentPolicyDebug = buildAppointmentPolicyDebug(appointmentPolicyContext);
     const appointmentPolicyPrompt = buildSandboxAppointmentPolicyPrompt(appointmentPolicyContext);
     const appointmentDraftContext = appointmentDraft
       ? JSON.stringify(
@@ -407,6 +438,12 @@ JSON schema：
     }
 
     const normalizedResult = normalizeResult(parsed);
+    if (flowHint === "appointment_flow" && normalizedResult.intent !== "abnormal_alert" && normalizedResult.intent !== "manual_reply_task") {
+      normalizedResult.intent = "appointment_request";
+      normalizedResult.target_module = "Appointment Requests";
+      normalizedResult.confidence = Math.max(normalizedResult.confidence, 0.9);
+    }
+
     if (normalizedResult.intent === "appointment_request") {
       const ruleExtracted = extractSandboxAppointmentFieldsFromMessage(message.trim(), appointmentPolicyContext);
       const mergedExtracted = normalizeSandboxAppointmentExtracted({
@@ -421,12 +458,14 @@ JSON schema：
       const draftForMissingCheck = mergeSandboxAppointmentDraft(coerceAppointmentDraft(appointmentDraft), extractedWithStructuredTime);
       const customerStatus = normalizeSandboxAppointmentCustomerStatus(draftForMissingCheck.customer_status);
       const missingPolicyFields = getMissingSandboxAppointmentPolicyFields(appointmentPolicyContext, draftForMissingCheck);
-      const shouldUpdateMissingFields = appointmentPolicyContext.status === "active" || Array.isArray(extractedWithStructuredTime.missing_fields);
+      const canUsePolicyFields = appointmentPolicyContext.status === "active" || appointmentPolicyContext.status === "fallback_used";
+      const shouldUpdateMissingFields = canUsePolicyFields || Array.isArray(extractedWithStructuredTime.missing_fields);
       const nextMissingFields =
-        appointmentPolicyContext.status === "active" ? missingPolicyFields.map((item) => item.label) : extractedWithStructuredTime.missing_fields;
+        canUsePolicyFields ? missingPolicyFields.map((item) => item.label) : extractedWithStructuredTime.missing_fields;
 
       return NextResponse.json({
         appointmentPolicyContext,
+        appointmentPolicyDebug,
         result: {
           ...normalizedResult,
           target_module: "Appointment Requests",
@@ -442,7 +481,7 @@ JSON schema：
       });
     }
 
-    return NextResponse.json({ result: normalizedResult, appointmentPolicyContext });
+    return NextResponse.json({ result: normalizedResult, appointmentPolicyContext, appointmentPolicyDebug });
   } catch (error) {
     return NextResponse.json({ error: `分析失敗：${(error as Error).message}` }, { status: 500 });
   }

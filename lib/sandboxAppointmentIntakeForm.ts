@@ -27,7 +27,7 @@ type SandboxAppointmentPolicyForm = {
 };
 
 type SandboxAppointmentPolicyForms = {
-  status: "active" | "missing" | "unavailable";
+  status: "active" | "fallback_used" | "missing" | "unavailable";
   forms: SandboxAppointmentPolicyForm[];
   reason?: string;
 };
@@ -81,9 +81,26 @@ const POLICY_NOTE_LABEL_PATTERNS = [
 const SAFE_APPOINTMENT_NOTICE = "這還不是正式預約成功，需由門市人員確認後才算完成。";
 const ASK_PRICE_WEIGHT_REPLY =
   "如果需要我先幫您估報價，請補充寶貝目前體重大約幾公斤；如果只是送出預約申請，門市確認時也會再協助核對。";
+const SERVICE_KEYWORDS = ["洗澡", "美容", "住宿", "安親", "包月", "剪指甲", "清耳"];
 
 function compactText(value: string) {
   return value.trim().replace(/\s+/g, " ");
+}
+
+function normalizeFreeText(value: string) {
+  return value
+    .replace(/[０-９]/g, (char) => String.fromCharCode(char.charCodeAt(0) - 65248))
+    .replace(/[，。！？、,!?]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function cleanBreedCandidate(value: string) {
+  return normalizeFreeText(value)
+    .replace(/^(?:我要|想要|想|幫我|可以|請問|請|預約|約|改約)+/, "")
+    .replace(/(?:我要|想要|想|幫我|可以|請問|請|預約|約|改約|多少錢|費用|價格|價位|報價|收費)/g, "")
+    .replace(/\d+(?:[.,]\d+)?\s*(?:kg|公斤|k)/gi, "")
+    .trim();
 }
 
 function uniqueRequiredFields(fields: SandboxAppointmentPolicyRequiredField[]) {
@@ -115,6 +132,8 @@ function lineLooksLikeSectionHeading(line: string) {
 function detectPolicySection(line: string): SandboxAppointmentPolicyForm["status"] | null {
   const normalized = compactText(line).replace(/[：:]\s*$/, "");
   if (!normalized) return null;
+  if (/^(?:舊客|老客|回訪|回客)(?:預約)?(?:填寫格式|格式|表單|需填|填寫|資料|欄位)?$/.test(normalized)) return "returning";
+  if (/^(?:新客|第一次|初次|首次)(?:預約)?(?:填寫格式|格式|表單|需填|填寫|資料|欄位)?$/.test(normalized)) return "new";
   if (/舊客/.test(normalized) && /(?:需填|填寫|格式|預約資料|預約資訊|欄位|表單)/.test(normalized)) return "returning";
   if (/新客/.test(normalized) && !/舊客/.test(normalized) && /(?:需填|填寫|格式|預約資料|預約資訊|欄位|表單)/.test(normalized)) {
     return "new";
@@ -158,7 +177,7 @@ function parsePolicyLineField(line: string, options: { allowCustomFields: boolea
 }
 
 export function parseSandboxAppointmentPolicyIntakeForms(context: SandboxAppointmentPolicyContext): SandboxAppointmentPolicyForms {
-  if (context.status !== "active") {
+  if (context.status !== "active" && context.status !== "fallback_used") {
     return { status: context.status, forms: [], reason: context.reason };
   }
 
@@ -189,7 +208,7 @@ export function parseSandboxAppointmentPolicyIntakeForms(context: SandboxAppoint
     .map((form) => ({ ...form, fields: uniqueRequiredFields(form.fields) }))
     .filter((form) => form.fields.length > 0);
 
-  if (compacted.length > 0) return { status: "active", forms: compacted };
+  if (compacted.length > 0) return { status: context.status, forms: compacted, reason: context.reason };
 
   const allFields = uniqueRequiredFields(
     context.article.content
@@ -199,8 +218,8 @@ export function parseSandboxAppointmentPolicyIntakeForms(context: SandboxAppoint
   );
 
   return allFields.length > 0
-    ? { status: "active", forms: [{ status: "general", title: "預約填寫格式", fields: allFields }] }
-    : { status: "active", forms: [] };
+    ? { status: context.status, forms: [{ status: "general", title: "預約填寫格式", fields: allFields }], reason: context.reason }
+    : { status: context.status, forms: [], reason: "policy active but intake form parse failed" };
 }
 
 function getFormsForStatus(forms: SandboxAppointmentPolicyForm[], status: SandboxAppointmentCustomerStatus) {
@@ -214,7 +233,7 @@ export function getSandboxAppointmentPolicyRequiredFields(
   status: SandboxAppointmentCustomerStatus = "unknown",
 ): SandboxAppointmentPolicyRequiredField[] {
   const parsed = parseSandboxAppointmentPolicyIntakeForms(context);
-  if (parsed.status !== "active") return [];
+  if (parsed.status !== "active" && parsed.status !== "fallback_used") return [];
 
   if (status === "unknown") {
     const statusField = parsed.forms
@@ -273,8 +292,12 @@ export function buildSandboxAppointmentIntakeReply({
   }
 
   const parsed = parseSandboxAppointmentPolicyIntakeForms(policyContext);
-  if (parsed.status !== "active" || parsed.forms.length === 0) {
-    return `可以呀，我先幫您整理預約申請。不過目前還沒有可用的 active appointment_policy 預約表單，會先請門市人員確認需要補哪些資料。${SAFE_APPOINTMENT_NOTICE}`;
+  if (parsed.status === "missing" || parsed.status === "unavailable") {
+    return "目前預約表單尚未設定完成，已轉由門市人員確認。";
+  }
+
+  if (parsed.forms.length === 0) {
+    return "目前預約表單尚未設定完整，已轉由門市人員確認。";
   }
 
   const status = normalizeSandboxAppointmentCustomerStatus(draft.customer_status);
@@ -291,7 +314,7 @@ export function buildSandboxAppointmentIntakeReply({
   }
 
   if (draft.missing_fields.length === 0) {
-    return `資料已整理完整，可以建立預約申請。${SAFE_APPOINTMENT_NOTICE}`;
+    return "資料已整理完成，我們會送出預約申請給門市確認。這還不是正式預約成功，需由門市人員確認時段後才算完成。";
   }
 
   const formsForStatus = getFormsForStatus(parsed.forms, status);
@@ -360,12 +383,25 @@ export function extractSandboxAppointmentFieldsFromMessage(
     if (weightMatch) extracted.pet_weight = `${weightMatch[1].replace(",", ".")}公斤`;
   }
 
+  if (!extracted.service_item) {
+    const normalized = normalizeFreeText(message);
+    const service = SERVICE_KEYWORDS.find((keyword) => normalized.includes(keyword));
+    if (service) extracted.service_item = service;
+  }
+
+  if (!extracted.pet_type_or_breed && extracted.service_item) {
+    const normalized = normalizeFreeText(message);
+    const beforeService = normalized.split(extracted.service_item)[0] || "";
+    const candidate = cleanBreedCandidate(beforeService);
+    if (candidate.length >= 2 && candidate.length <= 20) extracted.pet_type_or_breed = candidate;
+  }
+
   if (Object.keys(customFields).length > 0) extracted.custom_fields = customFields;
   return extracted;
 }
 
 export function isSandboxAppointmentPriceQuestion(message: string) {
-  return /(多少|多少錢|費用|收費|價錢|價格|價位|報價|估價)/.test(message);
+  return /(多少錢|費用|價格|價位|報價|收費|洗澡多少|美容多少|包月多少|多少|價錢|估價)/.test(message);
 }
 
 export function shouldAskSandboxAppointmentWeightForQuote(message: string, draft: SandboxAppointmentDraft) {

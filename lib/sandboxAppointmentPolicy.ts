@@ -7,7 +7,7 @@ import {
 
 export type SandboxAppointmentPolicyContext =
   | {
-      status: "active";
+      status: "active" | "fallback_used";
       article: {
         id: string;
         title: string;
@@ -15,11 +15,23 @@ export type SandboxAppointmentPolicyContext =
         content: string;
         updated_at?: string | null;
       };
+      reason?: string;
     }
   | {
       status: "missing" | "unavailable";
       reason: string;
     };
+
+export type SandboxAppointmentPolicyDebugStatus = "active" | "missing" | "unavailable" | "fallback_used" | "parse_failed";
+
+export type SandboxAppointmentPolicyDebug = {
+  appointment_policy_status: SandboxAppointmentPolicyDebugStatus;
+  matched_policy_title: string | null;
+  matched_policy_category: string | null;
+  parsed_forms: string[];
+  parsed_required_fields: string[];
+  reason: string;
+};
 
 type KnowledgeArticleRow = {
   id: string;
@@ -61,6 +73,35 @@ export async function fetchActiveSandboxAppointmentPolicy(): Promise<SandboxAppo
 
   const article = ((data ?? []) as KnowledgeArticleRow[]).find((item) => item.content?.trim());
   if (!article) {
+    const fallbackResult = await supabase
+      .from("knowledge_articles")
+      .select("id,title,category,content,updated_at")
+      .eq("is_active", true)
+      .ilike("title", "%預約%")
+      .ilike("content", "%新客%")
+      .ilike("content", "%舊客%")
+      .order("updated_at", { ascending: false })
+      .limit(1);
+
+    if (fallbackResult.error) {
+      return { status: "unavailable", reason: fallbackResult.error.message };
+    }
+
+    const fallbackArticle = ((fallbackResult.data ?? []) as KnowledgeArticleRow[]).find((item) => item.content?.trim());
+    if (fallbackArticle) {
+      return {
+        status: "fallback_used",
+        reason: "category mismatch fallback used",
+        article: {
+          id: fallbackArticle.id,
+          title: fallbackArticle.title,
+          category: fallbackArticle.category,
+          content: compactPolicyContent(fallbackArticle.content || ""),
+          updated_at: fallbackArticle.updated_at,
+        },
+      };
+    }
+
     return { status: "missing", reason: "No active appointment_policy article was found." };
   }
 
@@ -77,7 +118,7 @@ export async function fetchActiveSandboxAppointmentPolicy(): Promise<SandboxAppo
 }
 
 export function buildSandboxAppointmentPolicyPrompt(context: SandboxAppointmentPolicyContext) {
-  if (context.status === "active") {
+  if (context.status === "active" || context.status === "fallback_used") {
     return `Active Knowledge Base appointment_policy is available.
 Use this policy as the source for appointment required information and customer-facing appointment rules.
 Do not invent required fields that are not described in this policy.
@@ -93,6 +134,8 @@ appointment_policy article:
 title: ${context.article.title}
 category: ${context.article.category}
 updated_at: ${context.article.updated_at || "-"}
+lookup_status: ${context.status}
+lookup_reason: ${context.reason || "-"}
 content:
 ${context.article.content}`;
   }
