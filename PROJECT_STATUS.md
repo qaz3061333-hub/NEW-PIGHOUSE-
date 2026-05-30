@@ -12,6 +12,12 @@ NEW-PIGHOUSE- / new-pighouse-pjdh
 
 目前只做 LINE 客服後台方向；暫不做 FB、IG、POS、金流、自動排班。
 
+## Customer Service Triage MVP v1 方向更新
+
+主線已收斂為「寵物店 LINE 客服分流系統」，不是複雜線上預約系統。Conversation Logs sandbox 的核心應先處理重複問題自動查 active Knowledge Base 回覆，並把預約、問空檔、改約、取消、客訴、退款、異常、高風險、AI 不確定、KB 找不到等情境建立 Manual Reply Task，避免自動回覆後被視為已讀而漏處理。
+
+目前仍是 sandbox：不接真 LINE、不送 LINE、不寫正式 Supabase `messages`、不改 Supabase schema、不新增 migration / SQL、不改 env / RLS。預約在目前 MVP 只是 `human_required` 的一種人工待辦，不再作為 Conversation Logs sandbox 主流程。
+
 ## 使用者背景與操作原則
 
 使用者是程式 0 經驗的小白，主要透過 ChatGPT + Codex + Vercel + Supabase + GitHub 完成開發。

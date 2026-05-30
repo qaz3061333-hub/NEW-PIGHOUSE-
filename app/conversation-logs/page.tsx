@@ -31,7 +31,6 @@ import {
 import type { SandboxAppointmentPolicyContext } from "@/lib/sandboxAppointmentPolicy";
 import type { SandboxAppointmentPolicyDebug } from "@/lib/sandboxAppointmentPolicy";
 import {
-  appendSandboxAppointmentQuoteDisclaimer,
   buildSandboxAppointmentMissingWeightForQuoteReply,
   buildSandboxAppointmentPriceQuery,
   hasSandboxAppointmentQuoteBasis,
@@ -44,6 +43,13 @@ import {
   evaluateSandboxConversationFlow,
 } from "@/lib/sandboxConversationFlow";
 import type { SandboxConversationFlowDecision } from "@/lib/sandboxConversationFlow";
+import {
+  evaluateSandboxCustomerServiceTriage,
+  getSandboxManualPriorityLabel,
+  getSandboxManualTaskTypeLabel,
+  getSandboxTriageResultLabel,
+  type SandboxCustomerServiceTriageDecision,
+} from "@/lib/sandboxCustomerServiceTriage";
 
 type ChatMessage = {
   id: string;
@@ -67,6 +73,8 @@ type KnowledgeAnswerRunResult = {
   hasKnowledge: boolean;
   answer?: string;
   needs_manual_reply?: boolean;
+  used_knowledge_base?: boolean;
+  knowledge_fallback_reason?: string;
 };
 
 const KNOWLEDGE_MANUAL_REVIEW_CHAT_MESSAGE =
@@ -189,6 +197,8 @@ export default function ConversationLogsPage() {
   const [gateDecision, setGateDecision] = useState<SandboxGateDecision | null>(null);
   const [autoKnowledgeQueryMessage, setAutoKnowledgeQueryMessage] = useState("");
   const [conversationFlowDecision, setConversationFlowDecision] = useState<SandboxConversationFlowDecision | null>(null);
+  const [customerServiceTriage, setCustomerServiceTriage] = useState<SandboxCustomerServiceTriageDecision | null>(null);
+  const [quoteClarificationCount, setQuoteClarificationCount] = useState(0);
   const [appointmentPolicyDebug, setAppointmentPolicyDebug] = useState<SandboxAppointmentPolicyDebug | null>(null);
 
   useEffect(() => {
@@ -423,17 +433,104 @@ export default function ConversationLogsPage() {
     return isoCandidate.toISOString();
   }
 
+  function buildAnalysisResultFromTriage(
+    message: string,
+    decision: SandboxCustomerServiceTriageDecision,
+  ): SandboxAppointmentAnalyzeResult {
+    const intent =
+      decision.triage_result === "auto_reply_ok" || decision.triage_result === "need_clarification"
+        ? "knowledge_question"
+        : decision.triage_result === "unknown"
+          ? "unknown"
+          : "manual_reply_task";
+
+    return {
+      intent,
+      confidence: decision.triage_result === "unknown" ? 0.35 : 1,
+      target_module:
+        decision.triage_result === "auto_reply_ok" || decision.triage_result === "need_clarification"
+          ? "Knowledge Base"
+          : "Manual Reply Tasks",
+      summary: decision.classification_reason,
+      customer_reply: decision.suggested_reply || "我先幫您查詢門市知識庫後再回覆。",
+      extracted: {
+        customer_name: "",
+        service_item: decision.quoteDraft.service_item,
+        preferred_date: "",
+        preferred_time: "",
+        issue: message,
+        urgency: decision.priority === "urgent" ? "high" : "normal",
+        time_status: "unclear",
+        needs_clarification: decision.triage_result === "need_clarification",
+        pet_name: "",
+        pet_type_or_breed: decision.quoteDraft.pet_type_or_breed,
+        pet_weight: decision.quoteDraft.pet_weight,
+        owner_name: "",
+        phone: "",
+        customer_status: "",
+        health_notes: "",
+        custom_fields: {},
+        missing_fields: decision.missingQuoteFields,
+      },
+    };
+  }
+
+  function buildGateFromTriage(decision: SandboxCustomerServiceTriageDecision): SandboxGateDecision {
+    const manual = decision.triage_result === "human_required" || decision.triage_result === "unknown";
+    return {
+      decision: manual ? "manual_required" : "knowledge_candidate",
+      reason: decision.classification_reason,
+      suggested_reply: decision.suggested_reply,
+      should_call_gemini: false,
+      should_query_knowledge_base: decision.should_query_knowledge_base,
+      should_create_manual_task: decision.should_create_manual_task,
+    };
+  }
+
+  function createSandboxManualReplyTaskFromTriage(message: string, decision: SandboxCustomerServiceTriageDecision) {
+    appendSandboxManualReplyTaskEvent({
+      id: `sandbox-manual-reply-${Date.now()}`,
+      source: "conversation_logs",
+      customer: "Sandbox Customer",
+      source_channel: "LINE Sandbox",
+      triage_result: decision.triage_result,
+      classification_reason: decision.classification_reason,
+      task_type: decision.task_type || "other",
+      topic: getSandboxManualTaskTypeLabel(decision.task_type),
+      last_message: message,
+      auto_replied: decision.should_auto_reply,
+      suggested_reply: decision.suggested_reply,
+      reply_note: decision.suggested_reply || decision.classification_reason,
+      waiting_minutes: 0,
+      priority: decision.priority,
+      status: "open",
+      knowledge_fallback_reason: decision.knowledge_fallback_reason,
+      is_sandbox: true,
+      created_at: new Date().toISOString(),
+      is_replied: false,
+      replied_at: null,
+    });
+    setManualReplyTaskMessage("已建立 Sandbox 人工待辦，請到 Manual Reply Tasks 查看。");
+  }
+
   function createSandboxManualReplyTaskFromGate(message: string, gate: SandboxGateDecision) {
     appendSandboxManualReplyTaskEvent({
       id: `sandbox-manual-reply-${Date.now()}`,
       source: "conversation_logs",
       customer: "Sandbox Customer",
       source_channel: "LINE Sandbox",
+      triage_result: "human_required",
+      classification_reason: gate.reason,
+      task_type: "other",
       topic: `AI 分流轉人工：${message.slice(0, 30)}`,
       last_message: message,
+      auto_replied: true,
+      suggested_reply: gate.suggested_reply,
       reply_note: gate.suggested_reply,
       waiting_minutes: 0,
       priority: "urgent",
+      status: "open",
+      is_sandbox: true,
       created_at: new Date().toISOString(),
       is_replied: false,
       replied_at: null,
@@ -451,6 +548,7 @@ export default function ConversationLogsPage() {
 
     const previousAnalysisResult = analysisResult;
     const previousKnowledgeAnswer = knowledgeAnswer;
+    const previousCustomerServiceTriage = customerServiceTriage;
 
     setIsAnalyzing(true);
     setError("");
@@ -463,6 +561,7 @@ export default function ConversationLogsPage() {
     setGateDecision(null);
     setAutoKnowledgeQueryMessage("");
     setConversationFlowDecision(null);
+    setCustomerServiceTriage(null);
     setAppointmentPolicyDebug(null);
 
     const customerMessage: ChatMessage = {
@@ -472,8 +571,97 @@ export default function ConversationLogsPage() {
     };
     const nextHistory: SandboxHistoryMessage[] = [...chat, customerMessage].map(({ role, content }) => ({ role, content }));
     setChat((previous) => [...previous, customerMessage]);
+
+    const triageDecision = evaluateSandboxCustomerServiceTriage({
+      message,
+      clarificationAttempts: quoteClarificationCount,
+      fallbackQuoteDraft:
+        previousCustomerServiceTriage?.triage_result === "need_clarification"
+          ? previousCustomerServiceTriage.quoteDraft
+          : undefined,
+      continueQuoteClarification: previousCustomerServiceTriage?.triage_result === "need_clarification",
+    });
     const flowDecision = evaluateSandboxConversationFlow(message, appointmentDraft);
+    const triageGate = buildGateFromTriage(triageDecision);
+    const triageAnalysisResult = buildAnalysisResultFromTriage(message, triageDecision);
+
     setConversationFlowDecision(flowDecision);
+    setCustomerServiceTriage(triageDecision);
+    setGateDecision(triageGate);
+    setAnalysisResult(triageAnalysisResult);
+
+    if (triageDecision.triage_result === "need_clarification") {
+      setQuoteClarificationCount((previous) => previous + 1);
+      setChat((previous) => [
+        ...previous,
+        { id: `${Date.now()}-assistant`, role: "assistant", content: triageDecision.suggested_reply },
+      ]);
+      setInputMessage("");
+      setIsAnalyzing(false);
+      return;
+    }
+
+    if (triageDecision.triage_result === "human_required" || triageDecision.triage_result === "unknown") {
+      setQuoteClarificationCount(0);
+      createSandboxManualReplyTaskFromTriage(message, triageDecision);
+      setChat((previous) => [
+        ...previous,
+        { id: `${Date.now()}-assistant`, role: "assistant", content: triageDecision.suggested_reply },
+      ]);
+      setInputMessage("");
+      setIsAnalyzing(false);
+      return;
+    }
+
+    if (triageDecision.triage_result === "auto_reply_ok") {
+      setQuoteClarificationCount(0);
+      setAutoKnowledgeQueryMessage(message);
+      const knowledgeQuery = triageDecision.quoteDraft.service_item
+        ? buildSandboxQuoteKnowledgeQuery(triageDecision.quoteDraft)
+        : message;
+      const knowledgeResult = await runKnowledgeAnswer(knowledgeQuery, triageAnalysisResult, nextHistory);
+      setAutoKnowledgeQueryMessage("");
+
+      if (knowledgeResult.ok && knowledgeResult.hasKnowledge && knowledgeResult.answer) {
+        setCustomerServiceTriage({
+          ...triageDecision,
+          used_knowledge_base: Boolean(knowledgeResult.used_knowledge_base),
+          knowledge_fallback_reason: knowledgeResult.knowledge_fallback_reason || "",
+        });
+        setChat((previous) => [
+          ...previous,
+          { id: `${Date.now()}-assistant`, role: "assistant", content: knowledgeResult.answer || "" },
+        ]);
+        setInputMessage("");
+        setIsAnalyzing(false);
+        return;
+      }
+
+      const fallbackDecision: SandboxCustomerServiceTriageDecision = {
+        ...triageDecision,
+        triage_result: "human_required",
+        classification_reason: "Knowledge Base 找不到明確答案，或查詢結果要求人工確認。",
+        task_type: "kb_not_found",
+        should_auto_reply: true,
+        should_create_manual_task: true,
+        used_knowledge_base: Boolean(knowledgeResult.used_knowledge_base),
+        knowledge_fallback_reason: knowledgeResult.knowledge_fallback_reason || "Knowledge Base 找不到明確答案。",
+        suggested_reply: "這個問題我先幫您轉給門市人員確認，避免回覆錯誤。",
+        priority: "normal",
+      };
+      setCustomerServiceTriage(fallbackDecision);
+      setGateDecision(buildGateFromTriage(fallbackDecision));
+      setAnalysisResult(buildAnalysisResultFromTriage(message, fallbackDecision));
+      createSandboxManualReplyTaskFromTriage(message, fallbackDecision);
+      setChat((previous) => [
+        ...previous,
+        { id: `${Date.now()}-assistant`, role: "assistant", content: fallbackDecision.suggested_reply },
+      ]);
+      setInputMessage("");
+      setIsAnalyzing(false);
+      return;
+    }
+
     const manualFlowGate: SandboxGateDecision = {
       decision: "manual_required",
       reason: flowDecision.reason,
@@ -554,7 +742,7 @@ export default function ConversationLogsPage() {
       const quoteResult = await runKnowledgeAnswer(buildSandboxQuoteKnowledgeQuery(flowDecision.quoteDraft), quoteAnalysisResult, nextHistory);
       const assistantQuoteMessage =
         quoteResult.ok && quoteResult.hasKnowledge && quoteResult.answer
-          ? appendSandboxAppointmentQuoteDisclaimer(quoteResult.answer)
+          ? quoteResult.answer
           : "目前知識庫資料不足，已轉由門市人員確認報價。";
 
       setChat((previous) => [
@@ -607,7 +795,7 @@ export default function ConversationLogsPage() {
         const quoteResult = await runKnowledgeAnswer(buildSandboxAppointmentPriceQuery(appointmentDraft), priceFollowUpResult, nextHistory);
         assistantPriceReply =
           quoteResult.ok && quoteResult.hasKnowledge && quoteResult.answer
-            ? appendSandboxAppointmentQuoteDisclaimer(quoteResult.answer)
+            ? quoteResult.answer
             : "目前知識庫資料不足，建議由人工確認報價。";
       }
 
@@ -712,7 +900,7 @@ export default function ConversationLogsPage() {
         } else if (isSandboxAppointmentPriceQuestion(message) && hasSandboxAppointmentQuoteBasis(mergedDraft)) {
           const quoteResult = await runKnowledgeAnswer(buildSandboxAppointmentPriceQuery(mergedDraft), result, nextHistory);
           if (quoteResult.ok && quoteResult.hasKnowledge && quoteResult.answer) {
-            replyParts.push(appendSandboxAppointmentQuoteDisclaimer(quoteResult.answer));
+            replyParts.push(quoteResult.answer);
           } else {
             replyParts.push("目前知識庫資料不足，已轉由門市人員確認報價。");
           }
@@ -749,6 +937,8 @@ export default function ConversationLogsPage() {
     setGateDecision(null);
     setAutoKnowledgeQueryMessage("");
     setConversationFlowDecision(null);
+    setCustomerServiceTriage(null);
+    setQuoteClarificationCount(0);
     setAppointmentPolicyDebug(null);
     setError("");
   }
@@ -873,10 +1063,14 @@ export default function ConversationLogsPage() {
       const matchedArticles = payload.matched_articles || [];
       const needsManualReply = Boolean(payload.needs_manual_reply);
       const answer = payload.answer || "";
+      const usedKnowledgeBase = Boolean(payload.used_knowledge_base ?? matchedArticles.length > 0);
+      const knowledgeFallbackReason = payload.knowledge_fallback_reason || "";
       setKnowledgeAnswer({
         answer,
         matched_articles: matchedArticles,
         needs_manual_reply: needsManualReply,
+        used_knowledge_base: usedKnowledgeBase,
+        knowledge_fallback_reason: knowledgeFallbackReason,
       });
       if (matchedArticles.length === 0 || needsManualReply) {
         upsertSandboxKnowledgeGapEvent({
@@ -891,6 +1085,8 @@ export default function ConversationLogsPage() {
         hasKnowledge: matchedArticles.length > 0 && !needsManualReply,
         answer,
         needs_manual_reply: needsManualReply,
+        used_knowledge_base: usedKnowledgeBase,
+        knowledge_fallback_reason: knowledgeFallbackReason,
       };
     } catch (error) {
       setKnowledgeError(`知識庫沙盒查詢失敗：${(error as Error).message}`);
@@ -1051,6 +1247,61 @@ export default function ConversationLogsPage() {
             </dl>
           )}
         </div>
+
+        {customerServiceTriage ? (
+          <div className="mt-4 rounded-lg border border-teal-200 bg-teal-50 p-4 text-sm text-teal-950">
+            <h3 className="font-semibold">客服分流結果</h3>
+            <p className="mt-1 text-teal-900">
+              目前是 Sandbox 測試：不接真 LINE、不送 LINE、不寫正式 messages；需要人工的訊息會建立 Manual Reply Task。
+            </p>
+            <dl className="mt-3 grid gap-2 md:grid-cols-2">
+              <div>
+                <dt className="font-medium">triage result</dt>
+                <dd>
+                  {customerServiceTriage.triage_result}（{getSandboxTriageResultLabel(customerServiceTriage.triage_result)}）
+                </dd>
+              </div>
+              <div>
+                <dt className="font-medium">待辦類型</dt>
+                <dd>{customerServiceTriage.task_type ? getSandboxManualTaskTypeLabel(customerServiceTriage.task_type) : "不用建立人工待辦"}</dd>
+              </div>
+              <div className="md:col-span-2">
+                <dt className="font-medium">分類原因</dt>
+                <dd>{customerServiceTriage.classification_reason}</dd>
+              </div>
+              <div>
+                <dt className="font-medium">should_auto_reply</dt>
+                <dd>{customerServiceTriage.should_auto_reply ? "是，會先回一段安全回覆" : "否"}</dd>
+              </div>
+              <div>
+                <dt className="font-medium">should_create_manual_task</dt>
+                <dd>{customerServiceTriage.should_create_manual_task ? "是，已建立或應建立人工待辦" : "否"}</dd>
+              </div>
+              <div>
+                <dt className="font-medium">used_knowledge_base</dt>
+                <dd>{customerServiceTriage.used_knowledge_base ? "有，使用 active Knowledge Base" : customerServiceTriage.should_query_knowledge_base ? "準備查詢 active Knowledge Base" : "沒有"}</dd>
+              </div>
+              <div>
+                <dt className="font-medium">knowledge fallback reason</dt>
+                <dd>{customerServiceTriage.knowledge_fallback_reason || "目前沒有 fallback"}</dd>
+              </div>
+              <div>
+                <dt className="font-medium">優先度</dt>
+                <dd>{getSandboxManualPriorityLabel(customerServiceTriage.priority)}</dd>
+              </div>
+              <div>
+                <dt className="font-medium">是否 sandbox</dt>
+                <dd>{customerServiceTriage.is_sandbox ? "是" : "否"}</dd>
+              </div>
+              {customerServiceTriage.suggested_reply ? (
+                <div className="md:col-span-2">
+                  <dt className="font-medium">系統建議回覆草稿</dt>
+                  <dd className="whitespace-pre-wrap">{customerServiceTriage.suggested_reply}</dd>
+                </div>
+              ) : null}
+            </dl>
+          </div>
+        ) : null}
 
         {gateDecision ? (
           <div className="mt-4 rounded-lg border border-emerald-200 bg-emerald-50 p-4 text-sm text-emerald-900">
@@ -1422,6 +1673,8 @@ export default function ConversationLogsPage() {
                     <p className="font-medium text-slate-900">沙盒知識庫回答</p>
                     <p className="mt-1 whitespace-pre-wrap text-slate-800">{knowledgeAnswer.answer}</p>
                     <p className="mt-2 text-slate-700">needs_manual_reply：{knowledgeAnswer.needs_manual_reply ? "true" : "false"}</p>
+                    <p className="mt-1 text-slate-700">used_knowledge_base：{knowledgeAnswer.used_knowledge_base ? "true" : "false"}</p>
+                    <p className="mt-1 text-slate-700">knowledge fallback reason：{knowledgeAnswer.knowledge_fallback_reason || "-"}</p>
                     <p className="mt-2 font-medium text-slate-900">matched_articles</p>
                     {knowledgeAnswer.matched_articles.length > 0 ? (
                       <ul className="mt-1 list-disc pl-5 text-slate-800">

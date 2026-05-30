@@ -1,3 +1,5 @@
+import type { SandboxManualTaskType, SandboxTriageResult } from "@/lib/sandboxCustomerServiceTriage";
+
 export const SANDBOX_MANUAL_REPLY_TASK_EVENTS_KEY = "new_pighouse_sandbox_manual_reply_task_events_v1";
 
 export type SandboxManualReplyTaskEvent = {
@@ -5,11 +7,19 @@ export type SandboxManualReplyTaskEvent = {
   source: "conversation_logs";
   customer: string;
   source_channel: string;
+  triage_result?: SandboxTriageResult;
+  classification_reason?: string;
+  task_type?: SandboxManualTaskType;
   topic: string;
   last_message: string;
+  auto_replied?: boolean;
+  suggested_reply?: string;
   reply_note: string;
   waiting_minutes: number;
   priority: "urgent" | "normal";
+  status?: "open" | "in_progress" | "replied";
+  knowledge_fallback_reason?: string;
+  is_sandbox?: boolean;
   created_at: string;
   is_replied: boolean;
   replied_at: string | null;
@@ -58,7 +68,7 @@ export function appendSandboxManualReplyTaskEvent(event: SandboxManualReplyTaskE
 export function markSandboxManualReplyTaskEventReplied(id: string, repliedAt: string): SandboxManualReplyTaskEvent[] {
   if (!hasWindow()) return [];
   const next = listSandboxManualReplyTaskEvents().map((event) =>
-    event.id === id ? { ...event, is_replied: true, replied_at: repliedAt } : event,
+    event.id === id ? { ...event, is_replied: true, replied_at: repliedAt, status: "replied" as const } : event,
   );
   window.localStorage.setItem(SANDBOX_MANUAL_REPLY_TASK_EVENTS_KEY, JSON.stringify(next));
   return next;

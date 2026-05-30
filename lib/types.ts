@@ -62,6 +62,7 @@ export type ManualReplyTask = {
   priority: "normal" | "urgent";
   is_replied: boolean;
   replied_at?: string | null;
+  created_at?: string | null;
   archive_status: string;
   archived_at: string | null;
   archive_batch_id: string | null;
@@ -84,4 +85,6 @@ export type SandboxKnowledgeAnswer = {
     score: number;
   }>;
   needs_manual_reply: boolean;
+  used_knowledge_base?: boolean;
+  knowledge_fallback_reason?: string;
 };

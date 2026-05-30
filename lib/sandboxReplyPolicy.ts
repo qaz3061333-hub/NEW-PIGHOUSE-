@@ -100,12 +100,12 @@ export function evaluateSandboxReplyPolicy({
 
     if (knowledgeAnswer.matched_articles.length > 0 && !knowledgeAnswer.needs_manual_reply) {
       return {
-        mode: "draft_review_required",
-        label: "知識庫草稿，建議人工確認",
-        reason: "Knowledge Base 有匹配資料且未要求人工回覆；初期仍先保守列為人工確認草稿。",
-        future_line_behavior: "目前先作為沙盒草稿；未來可針對營業時間、付款方式、服務範圍等低風險類別開啟自動回覆。",
+        mode: "auto_reply_candidate",
+        label: "可由知識庫自動回覆",
+        reason: "Knowledge Base 有匹配資料且未要求人工回覆；沙盒可視為 auto_reply_ok。",
+        future_line_behavior: "未來正式 LINE 可在安全邊界完成後，針對明確 KB 問題自動回覆。",
         sandbox_notice: SANDBOX_NOTICE,
-        can_auto_send_in_future: false,
+        can_auto_send_in_future: true,
       };
     }
 

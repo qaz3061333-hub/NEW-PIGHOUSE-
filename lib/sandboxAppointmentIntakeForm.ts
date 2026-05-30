@@ -38,9 +38,6 @@ type FieldMatcher = {
   patterns: RegExp[];
 };
 
-export const SANDBOX_APPOINTMENT_QUOTE_DISCLAIMER =
-  "以上為預估區間，實際價格會依體型、毛長、現場狀況與配合度在區間內調整；打結、廢毛、除蚤或特殊狀況會另行評估加價。";
-
 export const SANDBOX_APPOINTMENT_DRAFT_FIELD_LABELS: Array<[SandboxAppointmentDraftField, string]> = [
   ["customer_status", "新客或舊客"],
   ["pet_name", "寶貝姓名"],
@@ -418,10 +415,4 @@ export function hasSandboxAppointmentQuoteBasis(draft: SandboxAppointmentDraft) 
 
 export function buildSandboxAppointmentPriceQuery(draft: SandboxAppointmentDraft) {
   return `${draft.pet_type_or_breed} ${draft.pet_weight} ${draft.service_item} 多少錢`;
-}
-
-export function appendSandboxAppointmentQuoteDisclaimer(answer: string) {
-  if (!answer.trim()) return "";
-  if (answer.includes(SANDBOX_APPOINTMENT_QUOTE_DISCLAIMER)) return answer.trim();
-  return `${answer.trim()}\n${SANDBOX_APPOINTMENT_QUOTE_DISCLAIMER}`;
 }
