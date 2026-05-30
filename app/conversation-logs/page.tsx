@@ -41,6 +41,7 @@ import {
   buildSandboxQuoteKnowledgeQuery,
   buildSandboxQuoteMissingInfoReply,
   evaluateSandboxConversationFlow,
+  isSandboxQuoteFlowQuestion,
 } from "@/lib/sandboxConversationFlow";
 import type { SandboxConversationFlowDecision } from "@/lib/sandboxConversationFlow";
 import {
@@ -164,6 +165,14 @@ function isLikelyKnowledgeFollowUp(
 
 function isLikelyAppointmentTurn(message: string) {
   return APPOINTMENT_TURN_PATTERN.test(message.trim());
+}
+
+function shouldBuildCustomerServiceQuoteKnowledgeQuery(
+  message: string,
+  decision: SandboxCustomerServiceTriageDecision,
+) {
+  if (!decision.quoteDraft.service_item) return false;
+  return isSandboxQuoteFlowQuestion(message) || decision.classification_reason.includes("報價問題");
 }
 
 export default function ConversationLogsPage() {
@@ -616,7 +625,7 @@ export default function ConversationLogsPage() {
     if (triageDecision.triage_result === "auto_reply_ok") {
       setQuoteClarificationCount(0);
       setAutoKnowledgeQueryMessage(message);
-      const knowledgeQuery = triageDecision.quoteDraft.service_item
+      const knowledgeQuery = shouldBuildCustomerServiceQuoteKnowledgeQuery(message, triageDecision)
         ? buildSandboxQuoteKnowledgeQuery(triageDecision.quoteDraft)
         : message;
       const knowledgeResult = await runKnowledgeAnswer(knowledgeQuery, triageAnalysisResult, nextHistory);
