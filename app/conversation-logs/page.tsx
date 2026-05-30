@@ -29,6 +29,7 @@ import {
   SandboxAppointmentDraft,
 } from "@/lib/sandboxAppointmentDraft";
 import type { SandboxAppointmentPolicyContext } from "@/lib/sandboxAppointmentPolicy";
+import type { SandboxAppointmentPolicyDebug } from "@/lib/sandboxAppointmentPolicy";
 import {
   appendSandboxAppointmentQuoteDisclaimer,
   buildSandboxAppointmentMissingWeightForQuoteReply,
@@ -37,6 +38,12 @@ import {
   isSandboxAppointmentPriceQuestion,
   shouldAskSandboxAppointmentWeightForQuote,
 } from "@/lib/sandboxAppointmentIntakeForm";
+import {
+  buildSandboxQuoteKnowledgeQuery,
+  buildSandboxQuoteMissingInfoReply,
+  evaluateSandboxConversationFlow,
+} from "@/lib/sandboxConversationFlow";
+import type { SandboxConversationFlowDecision } from "@/lib/sandboxConversationFlow";
 
 type ChatMessage = {
   id: string;
@@ -181,6 +188,8 @@ export default function ConversationLogsPage() {
   const [knowledgeError, setKnowledgeError] = useState("");
   const [gateDecision, setGateDecision] = useState<SandboxGateDecision | null>(null);
   const [autoKnowledgeQueryMessage, setAutoKnowledgeQueryMessage] = useState("");
+  const [conversationFlowDecision, setConversationFlowDecision] = useState<SandboxConversationFlowDecision | null>(null);
+  const [appointmentPolicyDebug, setAppointmentPolicyDebug] = useState<SandboxAppointmentPolicyDebug | null>(null);
 
   useEffect(() => {
     async function load() {
@@ -394,11 +403,17 @@ export default function ConversationLogsPage() {
 
   const canCreateSandboxRequest = useMemo(() => {
     if (!analysisResult || analysisResult.intent !== "appointment_request") return false;
+    if (
+      appointmentPolicyDebug?.appointment_policy_status !== "active" &&
+      appointmentPolicyDebug?.appointment_policy_status !== "fallback_used"
+    ) {
+      return false;
+    }
     const extracted = (analysisResult as SandboxAppointmentAnalyzeResult).extracted;
     if (extracted.needs_clarification || extracted.time_status !== "valid") return false;
     if (appointmentDraft.missing_fields.length > 0) return false;
     return isStructuredDateTime(appointmentDraft.preferred_date, appointmentDraft.preferred_time);
-  }, [analysisResult, appointmentDraft]);
+  }, [analysisResult, appointmentDraft, appointmentPolicyDebug]);
 
   function resolveSandboxRequestedAt(preferredDate: string, preferredTime: string) {
     if (!isStructuredDateTime(preferredDate, preferredTime)) return null;
@@ -447,6 +462,8 @@ export default function ConversationLogsPage() {
     setKnowledgeError("");
     setGateDecision(null);
     setAutoKnowledgeQueryMessage("");
+    setConversationFlowDecision(null);
+    setAppointmentPolicyDebug(null);
 
     const customerMessage: ChatMessage = {
       id: `${Date.now()}-customer`,
@@ -455,8 +472,26 @@ export default function ConversationLogsPage() {
     };
     const nextHistory: SandboxHistoryMessage[] = [...chat, customerMessage].map(({ role, content }) => ({ role, content }));
     setChat((previous) => [...previous, customerMessage]);
-    const gate = evaluateSandboxServiceGate(message);
+    const flowDecision = evaluateSandboxConversationFlow(message, appointmentDraft);
+    setConversationFlowDecision(flowDecision);
+    const manualFlowGate: SandboxGateDecision = {
+      decision: "manual_required",
+      reason: flowDecision.reason,
+      suggested_reply: "這個狀況建議先由門市人員人工確認，已轉由門市人員協助處理。",
+      should_call_gemini: false,
+      should_query_knowledge_base: false,
+      should_create_manual_task: true,
+    };
+    const gate = flowDecision.flow === "manual_flow" ? manualFlowGate : evaluateSandboxServiceGate(message);
     setGateDecision(gate);
+
+    if (flowDecision.flow === "manual_flow") {
+      createSandboxManualReplyTaskFromGate(message, gate);
+      setChat((previous) => [...previous, { id: `${Date.now()}-assistant`, role: "assistant", content: gate.suggested_reply }]);
+      setInputMessage("");
+      setIsAnalyzing(false);
+      return;
+    }
 
     if (gate.decision === "out_of_scope") {
       setChat((previous) => [...previous, { id: `${Date.now()}-assistant`, role: "assistant", content: gate.suggested_reply }]);
@@ -473,12 +508,79 @@ export default function ConversationLogsPage() {
       return;
     }
 
+    if (flowDecision.flow === "quote_flow") {
+      const quoteAnalysisResult: SandboxAppointmentAnalyzeResult = {
+        intent: "knowledge_question",
+        confidence: 1,
+        target_module: "Knowledge Base",
+        summary: `quote_flow：${message}`,
+        customer_reply: "這是明確詢價，會依 active Knowledge Base 查詢報價，不會建立預約申請。",
+        extracted: {
+          customer_name: "",
+          service_item: flowDecision.quoteDraft.service_item,
+          preferred_date: "",
+          preferred_time: "",
+          issue: message,
+          urgency: "",
+          time_status: "unclear",
+          needs_clarification: flowDecision.missingQuoteFields.length > 0,
+          pet_name: "",
+          pet_type_or_breed: flowDecision.quoteDraft.pet_type_or_breed,
+          pet_weight: flowDecision.quoteDraft.pet_weight,
+          owner_name: "",
+          phone: "",
+          customer_status: "",
+          health_notes: "",
+          custom_fields: {},
+          missing_fields: flowDecision.missingQuoteFields,
+        },
+      };
+
+      setAnalysisResult(quoteAnalysisResult);
+      if (flowDecision.missingQuoteFields.length > 0) {
+        setChat((previous) => [
+          ...previous,
+          {
+            id: `${Date.now()}-assistant`,
+            role: "assistant",
+            content: buildSandboxQuoteMissingInfoReply(flowDecision.missingQuoteFields),
+          },
+        ]);
+        setInputMessage("");
+        setIsAnalyzing(false);
+        return;
+      }
+
+      const quoteResult = await runKnowledgeAnswer(buildSandboxQuoteKnowledgeQuery(flowDecision.quoteDraft), quoteAnalysisResult, nextHistory);
+      const assistantQuoteMessage =
+        quoteResult.ok && quoteResult.hasKnowledge && quoteResult.answer
+          ? appendSandboxAppointmentQuoteDisclaimer(quoteResult.answer)
+          : "目前知識庫資料不足，已轉由門市人員確認報價。";
+
+      setChat((previous) => [
+        ...previous,
+        {
+          id: `${Date.now()}-assistant`,
+          role: "assistant",
+          content: assistantQuoteMessage,
+        },
+      ]);
+      setInputMessage("");
+      setIsAnalyzing(false);
+      return;
+    }
+
     const canContinueKnowledgeQuestion =
       gate.decision === "knowledge_candidate" || gate.decision === "allow_ai_analysis";
     const shouldContinueKnowledgeQuestion =
       canContinueKnowledgeQuestion && !isLikelyAppointmentTurn(message) && isLikelyKnowledgeFollowUp(message, previousAnalysisResult, previousKnowledgeAnswer);
 
-    if (gate.decision === "knowledge_candidate" && isSandboxAppointmentPriceQuestion(message) && !isSandboxAppointmentDraftEmpty(appointmentDraft)) {
+    if (
+      flowDecision.flow !== "appointment_flow" &&
+      gate.decision === "knowledge_candidate" &&
+      isSandboxAppointmentPriceQuestion(message) &&
+      !isSandboxAppointmentDraftEmpty(appointmentDraft)
+    ) {
       const priceFollowUpResult: SandboxAnalyzeResult = {
         intent: "knowledge_question",
         confidence: 1,
@@ -504,7 +606,7 @@ export default function ConversationLogsPage() {
       } else if (hasSandboxAppointmentQuoteBasis(appointmentDraft)) {
         const quoteResult = await runKnowledgeAnswer(buildSandboxAppointmentPriceQuery(appointmentDraft), priceFollowUpResult, nextHistory);
         assistantPriceReply =
-          quoteResult.ok && quoteResult.answer
+          quoteResult.ok && quoteResult.hasKnowledge && quoteResult.answer
             ? appendSandboxAppointmentQuoteDisclaimer(quoteResult.answer)
             : "目前知識庫資料不足，建議由人工確認報價。";
       }
@@ -522,7 +624,7 @@ export default function ConversationLogsPage() {
       return;
     }
 
-    if (gate.decision === "knowledge_candidate" || shouldContinueKnowledgeQuestion) {
+    if (flowDecision.flow !== "appointment_flow" && (gate.decision === "knowledge_candidate" || shouldContinueKnowledgeQuestion)) {
       const knowledgeOnlyResult: SandboxAnalyzeResult = {
         intent: "knowledge_question",
         confidence: 1,
@@ -575,19 +677,21 @@ export default function ConversationLogsPage() {
       const response = await fetch("/api/sandbox/analyze-message", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message, history: nextHistory, gateDecision: gate.decision, appointmentDraft }),
+        body: JSON.stringify({ message, history: nextHistory, gateDecision: gate.decision, appointmentDraft, flowHint: flowDecision.flow }),
       });
 
       const payload = (await response.json()) as {
         error?: string;
         result?: SandboxAppointmentAnalyzeResult;
         appointmentPolicyContext?: SandboxAppointmentPolicyContext;
+        appointmentPolicyDebug?: SandboxAppointmentPolicyDebug;
       };
       const result = payload.result;
       if (!response.ok || !result) {
         setError(payload.error || "沙盒分析失敗，請稍後再試。");
         return;
       }
+      setAppointmentPolicyDebug(payload.appointmentPolicyDebug || null);
 
       let resultForUi: SandboxAppointmentAnalyzeResult = result;
       if (result.intent === "appointment_request") {
@@ -607,8 +711,10 @@ export default function ConversationLogsPage() {
           replyParts.push(buildSandboxAppointmentMissingWeightForQuoteReply());
         } else if (isSandboxAppointmentPriceQuestion(message) && hasSandboxAppointmentQuoteBasis(mergedDraft)) {
           const quoteResult = await runKnowledgeAnswer(buildSandboxAppointmentPriceQuery(mergedDraft), result, nextHistory);
-          if (quoteResult.ok && quoteResult.answer) {
+          if (quoteResult.ok && quoteResult.hasKnowledge && quoteResult.answer) {
             replyParts.push(appendSandboxAppointmentQuoteDisclaimer(quoteResult.answer));
+          } else {
+            replyParts.push("目前知識庫資料不足，已轉由門市人員確認報價。");
           }
         }
 
@@ -642,6 +748,8 @@ export default function ConversationLogsPage() {
     setKnowledgeError("");
     setGateDecision(null);
     setAutoKnowledgeQueryMessage("");
+    setConversationFlowDecision(null);
+    setAppointmentPolicyDebug(null);
     setError("");
   }
 
@@ -949,6 +1057,15 @@ export default function ConversationLogsPage() {
             <h3 className="font-semibold">AI 分流閘門</h3>
             <p className="mt-1">此分流閘門用於限制客服只處理 PIG HOUSE 服務範圍內問題，避免未來 LINE 被當作一般 AI 聊天工具濫用。</p>
             <ul className="mt-2 list-disc pl-5">
+              {conversationFlowDecision ? (
+                <>
+                  <li>conversation_flow：{conversationFlowDecision.flow}</li>
+                  <li>asks_quote：{conversationFlowDecision.asksQuote ? "true" : "false"}</li>
+                  <li>asks_appointment：{conversationFlowDecision.asksAppointment ? "true" : "false"}</li>
+                  <li>flow_reason：{conversationFlowDecision.reason}</li>
+                  <li>quote_missing_fields：{conversationFlowDecision.missingQuoteFields.join("、") || "-"}</li>
+                </>
+              ) : null}
               <li>decision：{gateDecision.decision}</li>
               <li>reason：{gateDecision.reason}</li>
               <li>should_call_gemini：{gateDecision.should_call_gemini ? "true" : "false"}</li>
@@ -956,6 +1073,37 @@ export default function ConversationLogsPage() {
               <li>should_create_manual_task：{gateDecision.should_create_manual_task ? "true" : "false"}</li>
               <li>suggested_reply：{gateDecision.suggested_reply}</li>
             </ul>
+          </div>
+        ) : null}
+        {appointmentPolicyDebug ? (
+          <div className="mt-4 rounded-lg border border-orange-200 bg-orange-50 p-4 text-sm text-orange-950">
+            <h3 className="font-semibold">appointment_policy diagnostics</h3>
+            <dl className="mt-3 grid gap-2 md:grid-cols-2">
+              <div>
+                <dt className="font-medium">appointment_policy_status</dt>
+                <dd>{appointmentPolicyDebug.appointment_policy_status}</dd>
+              </div>
+              <div>
+                <dt className="font-medium">matched policy title</dt>
+                <dd>{appointmentPolicyDebug.matched_policy_title || "-"}</dd>
+              </div>
+              <div>
+                <dt className="font-medium">matched policy category</dt>
+                <dd>{appointmentPolicyDebug.matched_policy_category || "-"}</dd>
+              </div>
+              <div>
+                <dt className="font-medium">parsed forms</dt>
+                <dd>{appointmentPolicyDebug.parsed_forms.join(" / ") || "-"}</dd>
+              </div>
+              <div className="md:col-span-2">
+                <dt className="font-medium">parsed required fields</dt>
+                <dd>{appointmentPolicyDebug.parsed_required_fields.join("、") || "-"}</dd>
+              </div>
+              <div className="md:col-span-2">
+                <dt className="font-medium">reason</dt>
+                <dd>{appointmentPolicyDebug.reason || "-"}</dd>
+              </div>
+            </dl>
           </div>
         ) : null}
         {gateDecision?.decision === "manual_required" ? (

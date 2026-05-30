@@ -211,7 +211,7 @@ export function buildSandboxAppointmentDraftReply(
   }
 
   if (hasCommittedLanguage || options.needsClarification === true || draft.missing_fields.length > 0 || knownFields.length > 0) {
-    const pendingText = draft.missing_fields.length === 0 ? "資料目前已較完整，可建立 pending 沙盒預約申請。" : "";
+    const pendingText = draft.missing_fields.length === 0 ? "資料目前已較完整，會先整理為預約申請。" : "";
     return `已收到預約需求，已整理成預約申請草稿。${knownFields.length + customFieldText.length > 0 ? `目前已知道：${[...knownFields, ...customFieldText].join("、")}。` : ""}${missingText}${pendingText}${safetyText}`;
   }
 
