@@ -18,47 +18,104 @@ export type SandboxConversationFlowDecision = {
   missingQuoteFields: string[];
 };
 
-const QUOTE_KEYWORDS = ["多少錢", "費用", "價格", "價位", "報價", "收費", "洗澡多少", "美容多少", "包月多少"];
-const APPOINTMENT_KEYWORDS = [
-  "我要預約",
-  "想預約",
-  "幫我約",
-  "可以約嗎",
-  "我要約洗澡",
-  "我要約美容",
-  "我要約住宿",
-  "我要改約",
-  "預約",
-  "改約",
-  "空檔",
-  "有空",
-  "幾點有空",
-  "幾點可以",
-  "明天可以",
-  "今天可以",
-  "後天可以",
-  "可以洗澡嗎",
-  "可以美容嗎",
-];
-const HIGH_RISK_KEYWORDS = ["流膿", "化膿", "流血", "受傷", "傷口", "紅腫", "發炎", "疼痛", "疑似感染", "客訴", "投訴", "退款", "退費"];
-const SERVICE_KEYWORDS = ["洗澡", "美容", "住宿", "安親", "包月", "剪指甲", "清耳"];
-
 const EMPTY_QUOTE_DRAFT: SandboxQuoteDraft = {
   pet_type_or_breed: "",
   pet_weight: "",
   service_item: "",
 };
 
-function includesAny(input: string, keywords: string[]) {
-  return keywords.some((keyword) => input.includes(keyword));
-}
+const QUOTE_KEYWORDS = [
+  "多少錢",
+  "價格",
+  "價錢",
+  "報價",
+  "費用",
+  "收費",
+  "怎麼算",
+  "怎麼計費",
+  "洗澡多少",
+  "美容多少",
+];
+
+const APPOINTMENT_KEYWORDS = [
+  "預約",
+  "約時間",
+  "約洗澡",
+  "約美容",
+  "空檔",
+  "有空",
+  "有沒有空",
+  "可以洗澡嗎",
+  "可以美容嗎",
+  "能洗澡嗎",
+  "能美容嗎",
+  "想洗澡",
+  "想美容",
+  "明天可以",
+  "今天可以",
+  "後天可以",
+];
+
+const RESCHEDULE_CANCEL_KEYWORDS = [
+  "改約",
+  "改時間",
+  "改期",
+  "取消",
+  "不能去了",
+  "不能去",
+  "換時間",
+  "延期",
+];
+
+const HIGH_RISK_KEYWORDS = [
+  "流血",
+  "流膿",
+  "化膿",
+  "受傷",
+  "傷口",
+  "紅腫",
+  "感染",
+  "潰爛",
+  "耳朵流膿",
+  "皮膚爛",
+  "咬人",
+  "攻擊",
+  "攻擊性",
+  "老犬",
+  "高齡",
+  "癲癇",
+  "抽搐",
+  "呼吸困難",
+  "發燒",
+  "嘔吐",
+  "拉肚子",
+  "獸醫",
+  "醫生",
+];
+
+const SERVICE_KEYWORDS = [
+  "洗澡",
+  "美容",
+  "住宿",
+  "安親",
+  "包月",
+  "剪指甲",
+  "清耳朵",
+  "除蚤",
+  "spa",
+  "SPA",
+];
 
 function normalizeText(value: string) {
   return value
-    .replace(/[０-９]/g, (char) => String.fromCharCode(char.charCodeAt(0) - 65248))
-    .replace(/[，。！？、,!?]/g, " ")
+    .normalize("NFKC")
     .replace(/\s+/g, " ")
-    .trim();
+    .trim()
+    .toLowerCase();
+}
+
+function includesAny(input: string, keywords: string[]) {
+  return keywords.some((keyword) => input.includes(keyword.toLowerCase()));
 }
 
 export function isSandboxQuoteFlowQuestion(message: string) {
@@ -66,7 +123,8 @@ export function isSandboxQuoteFlowQuestion(message: string) {
 }
 
 export function isSandboxAppointmentFlowRequest(message: string) {
-  return includesAny(normalizeText(message), APPOINTMENT_KEYWORDS);
+  const normalized = normalizeText(message);
+  return includesAny(normalized, APPOINTMENT_KEYWORDS) || includesAny(normalized, RESCHEDULE_CANCEL_KEYWORDS);
 }
 
 export function isSandboxHighRiskServiceQuestion(message: string) {
@@ -74,34 +132,42 @@ export function isSandboxHighRiskServiceQuestion(message: string) {
 }
 
 function extractWeight(message: string) {
-  const match = normalizeText(message).match(/(\d+(?:[.,]\d+)?)\s*(?:kg|公斤|k)/i);
-  return match ? `${match[1].replace(",", ".")}公斤` : "";
+  const match = normalizeText(message).match(/(\d+(?:[.,]\d+)?)\s*(?:kg|公斤|公克|g|k)/i);
+  return match ? `${match[1].replace(",", ".")}kg` : "";
 }
 
 function extractService(message: string) {
   const normalized = normalizeText(message);
-  return SERVICE_KEYWORDS.find((keyword) => normalized.includes(keyword)) || "";
+  return SERVICE_KEYWORDS.find((keyword) => normalized.includes(keyword.toLowerCase())) || "";
 }
 
 function cleanBreedCandidate(value: string) {
-  return normalizeText(value)
-    .replace(/^(?:我要|想要|想|幫我|可以|請問|請|預約|約|改約)+/, "")
-    .replace(/(?:我要|想要|想|幫我|可以|請問|請|預約|約|改約|多少錢|費用|價格|價位|報價|收費)/g, "")
-    .replace(/\d+(?:[.,]\d+)?\s*(?:kg|公斤|k)/gi, "")
+  let candidate = normalizeText(value);
+  for (const keyword of [...SERVICE_KEYWORDS, ...QUOTE_KEYWORDS, ...APPOINTMENT_KEYWORDS]) {
+    candidate = candidate.replace(new RegExp(keyword.toLowerCase(), "g"), " ");
+  }
+  return candidate
+    .replace(/\d+(?:[.,]\d+)?\s*(?:kg|公斤|公克|g|k)/gi, " ")
+    .replace(/[?？!！,，.。:：;；]/g, " ")
+    .replace(/\s+/g, " ")
     .trim();
 }
 
 function extractBreed(message: string, serviceItem: string) {
   const normalized = normalizeText(message);
   if (serviceItem) {
-    const beforeService = normalized.split(serviceItem)[0] || "";
+    const beforeService = normalized.split(serviceItem.toLowerCase())[0] || "";
     const candidate = cleanBreedCandidate(beforeService);
-    if (candidate.length >= 2 && candidate.length <= 20) return candidate;
+    if (candidate.length >= 2 && candidate.length <= 24) return candidate;
   }
 
-  const match = normalized.match(/([\u4e00-\u9fffA-Za-z][\u4e00-\u9fffA-Za-z\s-]{1,20}?)(?:\s*\d+(?:[.,]\d+)?\s*(?:kg|公斤|k)|\s*(?:洗澡|美容|住宿|安親|包月))/i);
-  const candidate = match ? cleanBreedCandidate(match[1]) : "";
-  return candidate.length >= 2 && candidate.length <= 20 ? candidate : "";
+  if (!/\d+(?:[.,]\d+)?\s*(?:kg|公斤|公克|g|k)/i.test(normalized)) {
+    return "";
+  }
+
+  const beforeWeight = normalized.split(/\d+(?:[.,]\d+)?\s*(?:kg|公斤|公克|g|k)/i)[0] || "";
+  const candidate = cleanBreedCandidate(beforeWeight);
+  return candidate.length >= 2 && candidate.length <= 24 ? candidate : "";
 }
 
 export function extractSandboxQuoteDraft(message: string, fallbackDraft?: Partial<SandboxAppointmentDraft>): SandboxQuoteDraft {
@@ -124,10 +190,7 @@ export function getMissingSandboxQuoteFields(quoteDraft: SandboxQuoteDraft) {
 export function buildSandboxQuoteMissingInfoReply(missingFields: string[]) {
   const uniqueMissing = Array.from(new Set(missingFields));
   if (uniqueMissing.length === 0) return "";
-  if (uniqueMissing.length === 3) {
-    return "可以呀，我先幫您估預計費用。請提供寶貝的品種、目前體重大約幾公斤，以及想詢問的服務項目，我再依知識庫幫您抓預估區間。";
-  }
-  return `可以呀，我先幫您估預計費用。請提供寶貝的${uniqueMissing.join("、")}，我再依知識庫幫您抓預估區間。`;
+  return `我先幫您確認報價規則。請再補充：${uniqueMissing.join("、")}，我才能依 Knowledge Base 的價格規則協助回覆。`;
 }
 
 export function buildSandboxQuoteKnowledgeQuery(quoteDraft: SandboxQuoteDraft) {
@@ -135,6 +198,7 @@ export function buildSandboxQuoteKnowledgeQuery(quoteDraft: SandboxQuoteDraft) {
 }
 
 export function evaluateSandboxConversationFlow(message: string, fallbackDraft?: Partial<SandboxAppointmentDraft>): SandboxConversationFlowDecision {
+  const normalized = normalizeText(message);
   const asksQuote = isSandboxQuoteFlowQuestion(message);
   const asksAppointment = isSandboxAppointmentFlowRequest(message);
   const isHighRisk = isSandboxHighRiskServiceQuestion(message);
@@ -147,7 +211,7 @@ export function evaluateSandboxConversationFlow(message: string, fallbackDraft?:
       asksQuote,
       asksAppointment,
       isHighRisk,
-      reason: "high-risk service or care question",
+      reason: "high risk or abnormal pet condition",
       quoteDraft,
       missingQuoteFields,
     };
@@ -159,7 +223,7 @@ export function evaluateSandboxConversationFlow(message: string, fallbackDraft?:
       asksQuote,
       asksAppointment,
       isHighRisk,
-      reason: asksQuote ? "appointment request with quote question" : "appointment request",
+      reason: includesAny(normalized, RESCHEDULE_CANCEL_KEYWORDS) ? "reschedule or cancel request" : "appointment or availability request",
       quoteDraft,
       missingQuoteFields,
     };
@@ -171,7 +235,7 @@ export function evaluateSandboxConversationFlow(message: string, fallbackDraft?:
       asksQuote,
       asksAppointment,
       isHighRisk,
-      reason: "explicit quote question",
+      reason: "price or quote question",
       quoteDraft,
       missingQuoteFields,
     };

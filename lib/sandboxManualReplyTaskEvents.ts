@@ -12,12 +12,21 @@ export type SandboxManualReplyTaskEvent = {
   task_type?: SandboxManualTaskType;
   topic: string;
   last_message: string;
+  ai_summary?: string;
+  known_details?: {
+    pet_name?: string;
+    pet_type_or_breed?: string;
+    phone?: string;
+    service_item?: string;
+    preferred_datetime?: string;
+  };
+  missing_details?: string[];
   auto_replied?: boolean;
   suggested_reply?: string;
   reply_note: string;
   waiting_minutes: number;
   priority: "urgent" | "normal";
-  status?: "open" | "in_progress" | "replied";
+  status?: "open" | "collecting_info" | "pending_human_reply" | "in_progress" | "replied" | "completed";
   knowledge_fallback_reason?: string;
   is_sandbox?: boolean;
   created_at: string;
