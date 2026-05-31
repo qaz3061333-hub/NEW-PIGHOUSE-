@@ -4,7 +4,6 @@ import {
   buildGuardedKnowledgeArticleSnippet,
   evaluateSandboxKnowledgeQueryGuard,
 } from "@/lib/sandboxKnowledgeQueryGuard";
-import { SANDBOX_APPOINTMENT_QUOTE_DISCLAIMER } from "@/lib/sandboxAppointmentIntakeForm";
 
 type KnowledgeAnswerRequest = {
   message?: string;
@@ -32,6 +31,18 @@ const CONTENT_SNIPPET_LIMIT = 2500;
 const MAX_CONTEXT_HISTORY_MESSAGES = 6;
 const HISTORY_MESSAGE_LIMIT = 220;
 const CONTEXTUAL_QUERY_LIMIT = 900;
+const GENERIC_SEARCH_TERMS = new Set([
+  "你們",
+  "可以",
+  "請問",
+  "幫我",
+  "幫忙",
+  "一下",
+  "規則",
+  "問題",
+  "這個",
+  "那個",
+]);
 const SUPPLEMENTAL_QUERY_PATTERN =
   /(\d+(?:[.,]\d+)?\s*(?:kg|公斤|g|公克)|油性|乾性|敏感|短毛|長毛|中和|板橋|很兇|會咬)/i;
 
@@ -101,13 +112,13 @@ function buildTerms(parts: string[]): string[] {
 
     for (const token of normalized.split(/[\s,，。！？!?.、；;：:\-_/()（）\[\]{}]+/)) {
       const word = token.trim().toLowerCase();
-      if (word.length >= 2) terms.add(word);
+      if (word.length >= 2 && !GENERIC_SEARCH_TERMS.has(word)) terms.add(word);
     }
 
     const plain = normalized.replace(/\s+/g, "").toLowerCase();
     for (let i = 0; i < plain.length - 1; i += 1) {
       const gram = plain.slice(i, i + 2);
-      if (gram.length === 2) terms.add(gram);
+      if (gram.length === 2 && !GENERIC_SEARCH_TERMS.has(gram)) terms.add(gram);
     }
   }
   return Array.from(terms);
@@ -180,9 +191,11 @@ export async function POST(request: Request) {
 
     if (matched.length === 0) {
       return NextResponse.json({
-        answer: "目前知識庫沒有找到足夠資料，建議交由人工確認",
+        answer: "這個問題我先幫您轉給門市人員確認，避免回覆錯誤。",
         matched_articles: [],
         needs_manual_reply: true,
+        used_knowledge_base: false,
+        knowledge_fallback_reason: "Knowledge Base 找不到明確答案。",
       });
     }
 
@@ -205,6 +218,8 @@ export async function POST(request: Request) {
           score,
         })),
         needs_manual_reply: guard.needs_manual_reply || needsManualReply(guard.answer),
+        used_knowledge_base: true,
+        knowledge_fallback_reason: guard.needs_manual_reply ? "Knowledge Base 規則要求轉人工確認。" : "",
       });
     }
 
@@ -223,7 +238,7 @@ export async function POST(request: Request) {
 
 請只根據下列知識庫資料回答客人，使用繁體中文、語氣友善、內容精簡。
 Knowledge Base 沙盒回答不要整段複製 KB；只回可回答的最小價格區間、追問缺少資訊、提醒現場評估、或建議就醫 / 轉人工。
-若回答包含價格、費用、收費、報價或估價區間，必須附上這句提醒：「${SANDBOX_APPOINTMENT_QUOTE_DISCLAIMER}」
+若回答包含價格、費用、收費、報價或估價區間，只能使用 Knowledge Base 內明確寫到的加價、另計、現場評估或注意事項；KB 沒寫的規則不要自行補上。
 若資料不足或無法確認，請明確說「需要人工確認」，禁止編造。
 ${guard.prompt_instructions}
 
@@ -264,6 +279,8 @@ ${context}`;
         score,
       })),
       needs_manual_reply: needsManualReply(answer),
+      used_knowledge_base: true,
+      knowledge_fallback_reason: needsManualReply(answer) ? "Knowledge Base 回覆結果標記需要人工確認。" : "",
     });
   } catch (error) {
     return NextResponse.json({ error: `知識庫沙盒查詢失敗：${(error as Error).message}` }, { status: 500 });
