@@ -9,7 +9,7 @@ import { ConversationLog, SandboxKnowledgeAnswer } from "@/lib/types";
 import { appendSandboxManualReplyTaskEvent, SandboxManualReplyTaskEvent } from "@/lib/sandboxManualReplyTaskEvents";
 import { upsertSandboxKnowledgeGapEvent } from "@/lib/sandboxKnowledgeGapEvents";
 import {
-  buildSandboxQuoteKnowledgeQuery,
+  buildSandboxKnowledgeQueryForMessage,
   evaluateSandboxConversationFlow,
   type SandboxConversationFlowDecision,
 } from "@/lib/sandboxConversationFlow";
@@ -235,10 +235,7 @@ export default function ConversationLogsPage() {
     decision: SandboxCustomerServiceTriageDecision,
     history: SandboxHistoryMessage[],
   ): Promise<{ ok: boolean; answer?: SandboxKnowledgeAnswer; error?: string }> {
-    const knowledgeQuery =
-      decision.quoteDraft.pet_type_or_breed && decision.quoteDraft.pet_weight && decision.quoteDraft.service_item
-        ? buildSandboxQuoteKnowledgeQuery(decision.quoteDraft)
-        : message;
+    const knowledgeQuery = buildSandboxKnowledgeQueryForMessage(message, decision.quoteDraft);
 
     try {
       const response = await fetch("/api/sandbox/knowledge-answer", {

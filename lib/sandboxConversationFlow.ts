@@ -33,8 +33,6 @@ const QUOTE_KEYWORDS = [
   "收費",
   "怎麼算",
   "怎麼計費",
-  "洗澡多少",
-  "美容多少",
 ];
 
 const APPOINTMENT_KEYWORDS = [
@@ -195,6 +193,19 @@ export function buildSandboxQuoteMissingInfoReply(missingFields: string[]) {
 
 export function buildSandboxQuoteKnowledgeQuery(quoteDraft: SandboxQuoteDraft) {
   return `${quoteDraft.pet_type_or_breed} ${quoteDraft.pet_weight} ${quoteDraft.service_item} 多少錢`;
+}
+
+export function shouldBuildSandboxQuoteKnowledgeQuery(message: string, quoteDraft: SandboxQuoteDraft) {
+  return (
+    isSandboxQuoteFlowQuestion(message) &&
+    Boolean(quoteDraft.pet_type_or_breed && quoteDraft.pet_weight && quoteDraft.service_item)
+  );
+}
+
+export function buildSandboxKnowledgeQueryForMessage(message: string, quoteDraft: SandboxQuoteDraft) {
+  return shouldBuildSandboxQuoteKnowledgeQuery(message, quoteDraft)
+    ? buildSandboxQuoteKnowledgeQuery(quoteDraft)
+    : message;
 }
 
 export function evaluateSandboxConversationFlow(message: string, fallbackDraft?: Partial<SandboxAppointmentDraft>): SandboxConversationFlowDecision {
