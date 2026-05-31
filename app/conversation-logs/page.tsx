@@ -79,18 +79,30 @@ function extractPetName(message: string) {
   return match?.[1] || "";
 }
 
-function extractPreferredDateTime(message: string) {
+function extractAppointmentDateText(message: string) {
   const normalized = compactText(message);
-  const dateText =
+  return (
     normalized.match(/\d{4}[-/]\d{1,2}[-/]\d{1,2}/)?.[0] ||
     normalized.match(/\d{1,2}[/-]\d{1,2}/)?.[0] ||
-    normalized.match(/今天|明天|後天|下週[一二三四五六日天]?|週[一二三四五六日天]/)?.[0] ||
-    "";
-  const timeText =
-    normalized.match(/(?:上午|下午|晚上|中午)?\s*\d{1,2}[:：]\d{2}/)?.[0]?.trim() ||
-    normalized.match(/(?:上午|下午|晚上|中午)\s*\d{1,2}\s*點(?:半)?/)?.[0]?.trim() ||
-    "";
+    normalized.match(/今天|明天|後天|大後天|下週[一二三四五六日天]?|下星期[一二三四五六日天]?|週[一二三四五六日天]|星期[一二三四五六日天]/)?.[0] ||
+    ""
+  );
+}
 
+function normalizeAppointmentTimeText(value: string) {
+  return value.replace(/\s+/g, "");
+}
+
+function extractAppointmentTimeText(message: string) {
+  const normalized = compactText(message);
+  return normalizeAppointmentTimeText(
+    normalized.match(/(?:上午|早上|中午|下午|晚上|晚間|傍晚)?\s*\d{1,2}\s*(?:[:：]\s*\d{2}|點\s*(?:半|\d{1,2}\s*分?)?)/)?.[0] || "",
+  );
+}
+
+function extractPreferredDateTime(message: string) {
+  const dateText = extractAppointmentDateText(message);
+  const timeText = extractAppointmentTimeText(message);
   return [dateText, timeText].filter(Boolean).join(" ");
 }
 
@@ -111,7 +123,11 @@ function getMissingAppointmentDetails(knownDetails: KnownDetails) {
   if (!knownDetails.pet_type_or_breed) missing.push("品種");
   if (!knownDetails.phone) missing.push("電話");
   if (!knownDetails.service_item) missing.push("服務項目");
-  if (!knownDetails.preferred_datetime) missing.push("想預約日期 / 時間");
+  const hasPreferredDate = Boolean(extractAppointmentDateText(knownDetails.preferred_datetime || ""));
+  const hasPreferredTime = Boolean(extractAppointmentTimeText(knownDetails.preferred_datetime || ""));
+  if (!hasPreferredDate && !hasPreferredTime) missing.push("想預約日期 / 時間");
+  else if (!hasPreferredDate) missing.push("想預約日期");
+  else if (!hasPreferredTime) missing.push("想預約時間");
   return missing;
 }
 
