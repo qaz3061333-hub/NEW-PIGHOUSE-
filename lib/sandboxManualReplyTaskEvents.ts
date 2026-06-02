@@ -41,12 +41,19 @@ function hasWindow() {
 
 function hasUnsafeAppointmentAvailabilityReply(value?: string | null) {
   if (!value) return true;
-  const normalized = value.toLowerCase();
-  if (normalized.includes("可以")) return true;
-  if (normalized.includes("有空") || normalized.includes("有時段")) return true;
-  if (normalized.includes("已幫您安排") || normalized.includes("已預約")) return true;
-  if (normalized.includes("confirmed")) return true;
-  if (normalized.includes("預約成功") && !normalized.includes("這還不是正式預約成功")) return true;
+  const normalized = value.normalize("NFKC").replace(/\s+/g, "").toLowerCase();
+  const unsafePatterns = [
+    /(?:今天|明天|後天|大後天)?.{0,8}可以.{0,6}(?:洗|洗澡|美容|安排)/,
+    /可以[，,。.]?(?:我)?先?幫您.{0,12}(?:確認空檔|轉給門市)/,
+    /可以安排/,
+    /有空/,
+    /有時段/,
+    /已幫您安排/,
+    /已預約/,
+    /預約成功/,
+    /confirmed/,
+  ];
+  if (unsafePatterns.some((pattern) => pattern.test(normalized))) return true;
   return false;
 }
 
