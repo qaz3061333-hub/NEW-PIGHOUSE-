@@ -3,6 +3,7 @@ import {
   getMissingSandboxQuoteFields,
   type SandboxQuoteDraft,
 } from "@/lib/sandboxConversationFlow";
+import { isSandboxAppointmentAvailabilityMessage } from "@/lib/sandboxAppointmentInfoExtraction";
 
 export type SandboxTriageResult = "auto_reply_ok" | "need_clarification" | "human_required" | "unknown";
 
@@ -194,12 +195,13 @@ export function inferSandboxManualTaskTypeFromText(text: string): SandboxManualT
   const normalized = normalizeText(text);
   const hasComplaint = includesAny(normalized, COMPLAINT_KEYWORDS);
   const hasRefund = includesAny(normalized, REFUND_KEYWORDS);
+  const hasQuote = includesAny(normalized, QUOTE_KEYWORDS);
   if (includesAny(normalized, HIGH_RISK_KEYWORDS)) return "high_risk";
   if (hasComplaint && hasRefund) return "complaint_refund";
   if (hasComplaint) return "complaint";
   if (hasRefund) return "refund";
   if (includesAny(normalized, RESCHEDULE_CANCEL_KEYWORDS)) return "reschedule_cancel";
-  if (includesAny(normalized, APPOINTMENT_KEYWORDS)) return "appointment_availability";
+  if (!hasQuote && (isSandboxAppointmentAvailabilityMessage(text) || includesAny(normalized, APPOINTMENT_KEYWORDS))) return "appointment_availability";
   if (normalized.includes("knowledge base") || normalized.includes("kb") || normalized.includes("找不到")) return "kb_not_found";
   return "other";
 }
@@ -218,6 +220,7 @@ export function evaluateSandboxCustomerServiceTriage({
     (continueQuoteClarification && Boolean(quoteDraft.pet_type_or_breed || quoteDraft.pet_weight || quoteDraft.service_item));
   const hasComplaint = includesAny(normalized, COMPLAINT_KEYWORDS);
   const hasRefund = includesAny(normalized, REFUND_KEYWORDS);
+  const hasAppointmentAvailability = !asksQuote && (isSandboxAppointmentAvailabilityMessage(message) || includesAny(normalized, APPOINTMENT_KEYWORDS));
 
   if (includesAny(normalized, HIGH_RISK_KEYWORDS)) {
     return createDecision({
@@ -264,7 +267,7 @@ export function evaluateSandboxCustomerServiceTriage({
     });
   }
 
-  if (includesAny(normalized, APPOINTMENT_KEYWORDS)) {
+  if (hasAppointmentAvailability) {
     return createDecision({
       triage_result: "human_required",
       classification_reason: "訊息是預約或問空檔需求，MVP 不查真實空檔、不自動成立預約，先建立人工回覆任務。",
@@ -272,7 +275,7 @@ export function evaluateSandboxCustomerServiceTriage({
       should_auto_reply: true,
       should_query_knowledge_base: false,
       should_create_manual_task: true,
-      suggested_reply: "可以，我先幫您轉給門市人員確認空檔。這還不是正式預約成功，稍後會由同事回覆您。也請先補充寶貝姓名、品種、電話、服務項目、想預約日期 / 時間。",
+      suggested_reply: "可以，我先幫您轉給門市人員確認空檔。這還不是正式預約成功，稍後會由同事回覆您。",
       priority: "normal",
       quoteDraft,
       missingQuoteFields,
@@ -281,6 +284,21 @@ export function evaluateSandboxCustomerServiceTriage({
 
   if (asksQuote) {
     if (missingQuoteFields.length > 0) {
+      if (quoteDraft.service_item) {
+        return createDecision({
+          triage_result: "auto_reply_ok",
+          classification_reason: "報價問題已有服務項目，先查詢 active Knowledge Base，避免因日期或服務項目誤建預約人工任務。",
+          task_type: null,
+          should_auto_reply: true,
+          should_query_knowledge_base: true,
+          should_create_manual_task: false,
+          suggested_reply: "",
+          priority: "normal",
+          quoteDraft,
+          missingQuoteFields,
+        });
+      }
+
       if (clarificationAttempts >= MAX_CLARIFICATION_ATTEMPTS) {
         return createDecision({
           triage_result: "human_required",
