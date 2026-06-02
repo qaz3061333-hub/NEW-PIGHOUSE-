@@ -35,6 +35,7 @@ const COMMON_BREEDS = [
 
 const SERVICE_KEYWORDS = ["洗加剪", "剪指甲", "清耳朵", "洗澡", "美容", "住宿", "安親"];
 const BOOKING_KEYWORDS = ["預約", "約時間", "約洗澡", "約美容", "問空檔", "空檔", "有空", "有沒有空", "想預約"];
+const QUOTE_KEYWORDS = ["多少錢", "價格", "價錢", "報價", "費用", "收費", "怎麼算", "怎麼計費"];
 const DATE_TEXT_PATTERN = /\d{4}[-/]\d{1,2}[-/]\d{1,2}|\d{1,2}[/-]\d{1,2}|大後天|今天|明天|後天|下週[一二三四五六日天]?|下星期[一二三四五六日天]?|週[一二三四五六日天]|星期[一二三四五六日天]/;
 const TIME_TEXT_PATTERN = /(?:上午|早上|中午|下午|晚上|晚間|傍晚)?\s*(?:[0-2]?\d|[一二三四五六七八九十兩二]{1,3})\s*(?:[:：]\s*[0-5]\d|點\s*(?:半|[0-5]?\d\s*分?)?)/;
 
@@ -44,6 +45,11 @@ function compactText(value: string) {
 
 function normalizePhone(value: string) {
   return value.replace(/[^\d]/g, "");
+}
+
+export function hasSandboxQuoteKeyword(message: string) {
+  const normalized = compactText(message);
+  return QUOTE_KEYWORDS.some((keyword) => normalized.includes(keyword));
 }
 
 export function extractSandboxAppointmentPhone(message: string) {
@@ -173,6 +179,7 @@ export function getMissingSandboxAppointmentDetails(info: Pick<SandboxAppointmen
 
 export function isSandboxAppointmentAvailabilityMessage(message: string) {
   const normalized = compactText(message);
+  if (hasSandboxQuoteKeyword(normalized)) return false;
   if (BOOKING_KEYWORDS.some((keyword) => normalized.includes(keyword))) return true;
   if (/(^|[\s，,。])約(?!克夏)/.test(normalized)) return true;
   if (/(?:今天|明天|後天|大後天).{0,8}可以.{0,6}(?:洗澡|美容|住宿|安親|洗加剪|剪指甲|清耳朵)\s*嗎/.test(normalized)) return true;

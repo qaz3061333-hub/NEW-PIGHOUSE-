@@ -1,5 +1,5 @@
 import type { SandboxAppointmentDraft } from "@/lib/sandboxAppointmentDraft";
-import { isSandboxAppointmentAvailabilityMessage } from "@/lib/sandboxAppointmentInfoExtraction";
+import { hasSandboxQuoteKeyword, isSandboxAppointmentAvailabilityMessage } from "@/lib/sandboxAppointmentInfoExtraction";
 
 export type SandboxConversationFlow = "quote_flow" | "appointment_flow" | "manual_flow" | "unknown";
 
@@ -123,7 +123,7 @@ export function isSandboxQuoteFlowQuestion(message: string) {
 
 export function isSandboxAppointmentFlowRequest(message: string) {
   const normalized = normalizeText(message);
-  return isSandboxAppointmentAvailabilityMessage(message) || includesAny(normalized, APPOINTMENT_KEYWORDS) || includesAny(normalized, RESCHEDULE_CANCEL_KEYWORDS);
+  return includesAny(normalized, RESCHEDULE_CANCEL_KEYWORDS) || (!hasSandboxQuoteKeyword(message) && (isSandboxAppointmentAvailabilityMessage(message) || includesAny(normalized, APPOINTMENT_KEYWORDS)));
 }
 
 export function isSandboxHighRiskServiceQuestion(message: string) {
@@ -146,6 +146,9 @@ function cleanBreedCandidate(value: string) {
     candidate = candidate.replace(new RegExp(keyword.toLowerCase(), "g"), " ");
   }
   return candidate
+    .replace(/\d{4}[-/]\d{1,2}[-/]\d{1,2}|\d{1,2}[/-]\d{1,2}|大後天|今天|明天|後天|下週[一二三四五六日天]?|下星期[一二三四五六日天]?|週[一二三四五六日天]|星期[一二三四五六日天]/g, " ")
+    .replace(/(?:上午|早上|中午|下午|晚上|晚間|傍晚)?\s*(?:[0-2]?\d|[一二三四五六七八九十兩二]{1,3})\s*(?:[:：]\s*[0-5]\d|點\s*(?:半|[0-5]?\d\s*分?)?)/g, " ")
+    .replace(/09\d{2}[-\s]?\d{3}[-\s]?\d{3}|09\d{8}/g, " ")
     .replace(/\d+(?:[.,]\d+)?\s*(?:kg|公斤|公克|g|k)/gi, " ")
     .replace(/[?？!！,，.。:：;；]/g, " ")
     .replace(/\s+/g, " ")
