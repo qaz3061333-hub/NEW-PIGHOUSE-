@@ -285,7 +285,7 @@ export function buildSandboxAppointmentIntakeReply({
   timeStatus?: string;
 }) {
   if (timeStatus === "past") {
-    return `可以呀，我先幫您整理預約申請。不過您提到的時間似乎已經過去，請再提供新的希望日期與希望時間。${SAFE_APPOINTMENT_NOTICE}`;
+    return `收到，我先幫您整理預約申請。不過您提到的時間似乎已經過去，請再提供新的希望日期與希望時間。${SAFE_APPOINTMENT_NOTICE}`;
   }
 
   const parsed = parseSandboxAppointmentPolicyIntakeForms(policyContext);
@@ -307,7 +307,7 @@ export function buildSandboxAppointmentIntakeReply({
     const returningForms = parsed.forms.filter((form) => form.status === "returning");
     const visibleForms = [...newForms, ...returningForms];
     const formText = (visibleForms.length > 0 ? visibleForms : parsed.forms).map((form) => formatForm(form, draft)).join("\n\n");
-    return `可以呀，我先幫您整理預約申請。不過這還不是正式預約成功，門市確認後才會完成預約。請您先選擇新客或舊客，並依照下面格式回覆，我會再幫您整理成申請草稿。\n\n${formText}`;
+    return `收到，我先幫您整理預約申請。不過這還不是正式預約成功，門市確認後才會完成預約。請您先選擇新客或舊客，並依照下面格式回覆，我會再幫您整理成申請草稿。\n\n${formText}`;
   }
 
   if (draft.missing_fields.length === 0) {
@@ -318,12 +318,12 @@ export function buildSandboxAppointmentIntakeReply({
   const shouldShowFullForm = wasEmpty || statusJustProvided || draft.missing_fields.length >= 4;
 
   if (shouldShowFullForm && formsForStatus.length > 0) {
-    return `可以呀，我先幫您整理預約申請。不過這還不是正式預約成功，門市確認後才會完成預約。請您先依照下面格式補齊資料，我會再幫您整理成申請草稿。\n\n${formsForStatus
+    return `收到，我先幫您整理預約申請。不過這還不是正式預約成功，門市確認後才會完成預約。請您先依照下面格式補齊資料，我會再幫您整理成申請草稿。\n\n${formsForStatus
       .map((form) => formatForm(form, draft))
       .join("\n\n")}`;
   }
 
-  return `可以呀，我先幫您整理預約申請。請再補充${draft.missing_fields.join("、")}。${SAFE_APPOINTMENT_NOTICE}`;
+  return `收到，我先幫您整理預約申請。請再補充${draft.missing_fields.join("、")}。${SAFE_APPOINTMENT_NOTICE}`;
 }
 
 export function extractSandboxAppointmentFieldsFromMessage(

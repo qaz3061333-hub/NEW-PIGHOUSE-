@@ -3,7 +3,12 @@ import {
   getMissingSandboxQuoteFields,
   type SandboxQuoteDraft,
 } from "@/lib/sandboxConversationFlow";
-import { isSandboxAppointmentAvailabilityMessage } from "@/lib/sandboxAppointmentInfoExtraction";
+import {
+  extractSandboxAppointmentInfo,
+  getMissingSandboxAppointmentDetails,
+  isSandboxAppointmentAvailabilityMessage,
+} from "@/lib/sandboxAppointmentInfoExtraction";
+import { buildSandboxAppointmentAvailabilityReply } from "@/lib/sandboxAppointmentAvailabilityReply";
 
 export type SandboxTriageResult = "auto_reply_ok" | "need_clarification" | "human_required" | "unknown";
 
@@ -268,6 +273,8 @@ export function evaluateSandboxCustomerServiceTriage({
   }
 
   if (hasAppointmentAvailability) {
+    const missingAppointmentDetails = getMissingSandboxAppointmentDetails(extractSandboxAppointmentInfo(message));
+
     return createDecision({
       triage_result: "human_required",
       classification_reason: "訊息是預約或問空檔需求，MVP 不查真實空檔、不自動成立預約，先建立人工回覆任務。",
@@ -275,7 +282,7 @@ export function evaluateSandboxCustomerServiceTriage({
       should_auto_reply: true,
       should_query_knowledge_base: false,
       should_create_manual_task: true,
-      suggested_reply: "可以，我先幫您轉給門市人員確認空檔。這還不是正式預約成功，稍後會由同事回覆您。",
+      suggested_reply: buildSandboxAppointmentAvailabilityReply(missingAppointmentDetails),
       priority: "normal",
       quoteDraft,
       missingQuoteFields,

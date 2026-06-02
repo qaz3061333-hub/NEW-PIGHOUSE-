@@ -83,7 +83,7 @@ export function evaluateSandboxServiceGate(message: string): SandboxGateDecision
     return {
       decision: "appointment_candidate",
       reason: "訊息包含預約、改約或時段詢問語意。",
-      suggested_reply: "收到，我先幫您確認可預約時段與流程。",
+      suggested_reply: "收到，我先幫您轉給門市確認空檔。這還不是正式預約成功。",
       should_call_gemini: true,
       should_query_knowledge_base: false,
       should_create_manual_task: false,

@@ -25,6 +25,7 @@ import {
   extractSandboxAppointmentInfo,
   getMissingSandboxAppointmentDetails,
 } from "@/lib/sandboxAppointmentInfoExtraction";
+import { buildSandboxAppointmentAvailabilityReply } from "@/lib/sandboxAppointmentAvailabilityReply";
 
 type ChatMessage = {
   id: string;
@@ -49,8 +50,6 @@ type KnownDetails = NonNullable<SandboxManualReplyTaskEvent["known_details"]>;
 
 const MISSING_TEXT = "未提供";
 const KB_MANUAL_REVIEW_REPLY = "這題我先幫您轉給門市人員確認，避免沒有 Knowledge Base 依據時回答錯誤。";
-const APPOINTMENT_TASK_REPLY = "可以，我先幫您轉給門市人員確認空檔。這還不是正式預約成功，稍後會由同事回覆您。";
-const APPOINTMENT_COMPLETE_ASSISTANT_REPLY = "收到，我已幫您轉給門市人員確認空檔。這還不是正式預約成功，稍後會由同事回覆您。";
 
 function formatTaipei(value?: string | null) {
   if (!value) return MISSING_TEXT;
@@ -100,8 +99,7 @@ function buildTaskStatus(taskType: SandboxManualTaskType | null, missingDetails:
 }
 
 function buildAppointmentTaskReply(missingDetails: string[]) {
-  if (missingDetails.length === 0) return APPOINTMENT_TASK_REPLY;
-  return `${APPOINTMENT_TASK_REPLY}也請先補充：${missingDetails.join("、")}。`;
+  return buildSandboxAppointmentAvailabilityReply(missingDetails);
 }
 
 function buildManualTaskSuggestedReply(
@@ -115,7 +113,7 @@ function buildManualTaskSuggestedReply(
 
 function buildAssistantReplyForManualTask(task: SandboxManualReplyTaskEvent, decision: SandboxCustomerServiceTriageDecision) {
   const missingDetails = task.missing_details || [];
-  if (task.task_type === "appointment_availability" && missingDetails.length === 0) return APPOINTMENT_COMPLETE_ASSISTANT_REPLY;
+  if (task.task_type === "appointment_availability") return buildSandboxAppointmentAvailabilityReply(missingDetails);
   return task.suggested_reply || decision.suggested_reply;
 }
 
