@@ -141,8 +141,11 @@ export default function KnowledgeBasePage() {
   }
 
   return (
-    <PageShell title="Knowledge Base 知識庫管理" description="管理客服可引用的標準回覆與作業 SOP。">
+    <PageShell title="Knowledge Base" description="價格、規則、服務內容、住宿須知、營業時間與包月規則都從這裡維護">
       {notice ? <p className="mb-3 rounded-md bg-amber-50 px-3 py-2 text-sm text-amber-800">{notice}</p> : null}
+      <p className="mb-3 rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-900">
+        Knowledge Base 是自動回覆的唯一依據；不要把價格或店家規則寫死在程式碼。
+      </p>
       <section className="mb-4 rounded-lg border border-emerald-200 bg-emerald-50 p-3">
         <div className="flex items-center justify-between">
           <h3 className="text-sm font-semibold text-emerald-900">Sandbox 知識庫補充建議</h3>

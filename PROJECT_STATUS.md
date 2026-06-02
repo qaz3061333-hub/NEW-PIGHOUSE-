@@ -1131,3 +1131,14 @@ C. 必須等正式 LINE / login / RLS / audit log 規劃後再做：
 - 本次沒有接 LINE。
 - 本次沒有寫 Supabase `messages`。
 - 本次沒有處理 PR #7。
+
+## Human Agent Console Simplification v1
+
+Direction update:
+
+- Main entries: Knowledge Base, Conversation Logs, Human Reply Workbench.
+- Knowledge Base remains the only source for prices, store rules, services, boarding notes, business hours, monthly plans, and FAQ auto replies. No prices or store rules are hardcoded in code.
+- Conversation Logs is now positioned as LINE conversation logs and the sandbox test entry. The main view shows customer message, system reply, KB usage, human handoff state, and handoff type. Engineering details are folded under developer debug info.
+- Human Reply Workbench is the staff daily entry. Appointment / availability, reschedule / cancel, quote missing info, complaint / refund, abnormal / high risk, KB not found, AI uncertain, and other human-needed messages are centralized there.
+- Appointment Requests and Abnormal Alerts remain as legacy / sandbox data views, not primary workflow entry points.
+- This update does not change Supabase schema, migrations, SQL, env, RLS, real LINE integration, POS, Google Calendar, formal Supabase messages, or PR #7.

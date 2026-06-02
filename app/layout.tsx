@@ -2,8 +2,8 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Pet Care CS Backend MVP",
-  description: "LINE 官方帳號客服後台 MVP（mock data）",
+  title: "寵物店 LINE AI 客服工作台",
+  description: "Knowledge Base、Conversation Logs 與人工回覆工作台 sandbox MVP",
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
