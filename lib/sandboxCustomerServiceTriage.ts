@@ -74,7 +74,7 @@ const SERVICE_INFO_KEYWORDS = [
   "需要準備",
 ];
 
-const QUOTE_KEYWORDS = ["多少錢", "價格", "價錢", "報價", "費用", "收費", "怎麼算", "怎麼計費"];
+const QUOTE_KEYWORDS = ["多少錢", "多少", "價格", "價錢", "報價", "費用", "收費", "怎麼算", "怎麼計費"];
 const APPOINTMENT_KEYWORDS = [
   "預約",
   "約時間",

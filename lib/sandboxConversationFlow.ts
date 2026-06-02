@@ -27,6 +27,7 @@ const EMPTY_QUOTE_DRAFT: SandboxQuoteDraft = {
 
 const QUOTE_KEYWORDS = [
   "多少錢",
+  "多少",
   "價格",
   "價錢",
   "報價",
