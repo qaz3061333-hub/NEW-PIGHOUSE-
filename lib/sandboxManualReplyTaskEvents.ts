@@ -1,4 +1,5 @@
 import type { SandboxManualTaskType, SandboxTriageResult } from "@/lib/sandboxCustomerServiceTriage";
+import { buildSandboxAppointmentAvailabilityReply } from "@/lib/sandboxAppointmentAvailabilityReply";
 
 export const SANDBOX_MANUAL_REPLY_TASK_EVENTS_KEY = "new_pighouse_sandbox_manual_reply_task_events_v1";
 
@@ -38,6 +39,28 @@ function hasWindow() {
   return typeof window !== "undefined";
 }
 
+function hasUnsafeAppointmentAvailabilityReply(value?: string | null) {
+  if (!value) return true;
+  const normalized = value.toLowerCase();
+  if (normalized.includes("可以")) return true;
+  if (normalized.includes("有空") || normalized.includes("有時段")) return true;
+  if (normalized.includes("已幫您安排") || normalized.includes("已預約")) return true;
+  if (normalized.includes("confirmed")) return true;
+  if (normalized.includes("預約成功") && !normalized.includes("這還不是正式預約成功")) return true;
+  return false;
+}
+
+function normalizeAppointmentAvailabilityReply(event: SandboxManualReplyTaskEvent) {
+  if (event.task_type !== "appointment_availability") return event;
+  const safeReply = buildSandboxAppointmentAvailabilityReply(event.missing_details || []);
+
+  return {
+    ...event,
+    suggested_reply: safeReply,
+    reply_note: hasUnsafeAppointmentAvailabilityReply(event.reply_note) ? safeReply : event.reply_note,
+  };
+}
+
 function safeParse(value: string | null): SandboxManualReplyTaskEvent[] {
   if (!value) return [];
 
@@ -56,7 +79,7 @@ function safeParse(value: string | null): SandboxManualReplyTaskEvent[] {
         typeof row.created_at === "string" && typeof row.is_replied === "boolean" &&
         (typeof row.replied_at === "string" || row.replied_at === null),
       );
-    });
+    }).map(normalizeAppointmentAvailabilityReply);
   } catch {
     return [];
   }
