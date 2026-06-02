@@ -21,6 +21,10 @@ import {
   type SandboxCustomerServiceTriageDecision,
   type SandboxManualTaskType,
 } from "@/lib/sandboxCustomerServiceTriage";
+import {
+  extractSandboxAppointmentInfo,
+  getMissingSandboxAppointmentDetails,
+} from "@/lib/sandboxAppointmentInfoExtraction";
 
 type ChatMessage = {
   id: string;
@@ -45,6 +49,8 @@ type KnownDetails = NonNullable<SandboxManualReplyTaskEvent["known_details"]>;
 
 const MISSING_TEXT = "未提供";
 const KB_MANUAL_REVIEW_REPLY = "這題我先幫您轉給門市人員確認，避免沒有 Knowledge Base 依據時回答錯誤。";
+const APPOINTMENT_TASK_REPLY = "可以，我先幫您轉給門市人員確認空檔。這還不是正式預約成功，稍後會由同事回覆您。";
+const APPOINTMENT_COMPLETE_ASSISTANT_REPLY = "收到，我已幫您轉給門市人員確認空檔。這還不是正式預約成功，稍後會由同事回覆您。";
 
 function formatTaipei(value?: string | null) {
   if (!value) return MISSING_TEXT;
@@ -61,80 +67,56 @@ function formatTaipei(value?: string | null) {
   }).format(date);
 }
 
-function compactText(value: string) {
-  return value.normalize("NFKC").replace(/\s+/g, " ").trim();
-}
-
-function fieldValue(value?: string) {
-  return value?.trim() || MISSING_TEXT;
-}
-
-function extractPhone(message: string) {
-  return compactText(message).match(/09\d{8}|0\d{1,2}[-\s]?\d{6,8}/)?.[0]?.replace(/\s+/g, "") || "";
-}
-
-function extractPetName(message: string) {
-  const normalized = compactText(message);
-  const match = normalized.match(/(?:寶貝(?:名字)?(?:叫|是)?|名字(?:叫|是)?|叫做|叫)\s*([A-Za-z0-9\u4e00-\u9fff]{1,12})/);
-  return match?.[1] || "";
-}
-
-function extractAppointmentDateText(message: string) {
-  const normalized = compactText(message);
-  return (
-    normalized.match(/\d{4}[-/]\d{1,2}[-/]\d{1,2}/)?.[0] ||
-    normalized.match(/\d{1,2}[/-]\d{1,2}/)?.[0] ||
-    normalized.match(/今天|明天|後天|大後天|下週[一二三四五六日天]?|下星期[一二三四五六日天]?|週[一二三四五六日天]|星期[一二三四五六日天]/)?.[0] ||
-    ""
-  );
-}
-
-function normalizeAppointmentTimeText(value: string) {
-  return value.replace(/\s+/g, "");
-}
-
-function extractAppointmentTimeText(message: string) {
-  const normalized = compactText(message);
-  return normalizeAppointmentTimeText(
-    normalized.match(/(?:上午|早上|中午|下午|晚上|晚間|傍晚)?\s*\d{1,2}\s*(?:[:：]\s*\d{2}|點\s*(?:半|\d{1,2}\s*分?)?)/)?.[0] || "",
-  );
-}
-
-function extractPreferredDateTime(message: string) {
-  const dateText = extractAppointmentDateText(message);
-  const timeText = extractAppointmentTimeText(message);
-  return [dateText, timeText].filter(Boolean).join(" ");
-}
-
 function buildKnownDetails(message: string, decision: SandboxCustomerServiceTriageDecision): KnownDetails {
-  const shouldUseAppointmentFields = decision.task_type === "appointment_availability" || decision.task_type === "quote_missing_info";
+  if (decision.task_type === "appointment_availability") {
+    const appointmentInfo = extractSandboxAppointmentInfo(message);
+    return {
+      pet_name: appointmentInfo.pet_name,
+      pet_type_or_breed: appointmentInfo.pet_type_or_breed,
+      phone: appointmentInfo.phone,
+      service_item: appointmentInfo.service_item,
+      preferred_datetime: appointmentInfo.preferred_datetime,
+    };
+  }
+
+  const shouldUseAppointmentFields = decision.task_type === "quote_missing_info";
   return {
-    pet_name: extractPetName(message),
+    pet_name: "",
     pet_type_or_breed: shouldUseAppointmentFields ? decision.quoteDraft.pet_type_or_breed : "",
-    phone: extractPhone(message),
+    phone: "",
     service_item: shouldUseAppointmentFields ? decision.quoteDraft.service_item : "",
-    preferred_datetime: decision.task_type === "appointment_availability" ? extractPreferredDateTime(message) : "",
+    preferred_datetime: "",
   };
 }
 
-function getMissingAppointmentDetails(knownDetails: KnownDetails) {
-  const missing: string[] = [];
-  if (!knownDetails.pet_name) missing.push("寶貝姓名");
-  if (!knownDetails.pet_type_or_breed) missing.push("品種");
-  if (!knownDetails.phone) missing.push("電話");
-  if (!knownDetails.service_item) missing.push("服務項目");
-  const hasPreferredDate = Boolean(extractAppointmentDateText(knownDetails.preferred_datetime || ""));
-  const hasPreferredTime = Boolean(extractAppointmentTimeText(knownDetails.preferred_datetime || ""));
-  if (!hasPreferredDate && !hasPreferredTime) missing.push("想預約日期 / 時間");
-  else if (!hasPreferredDate) missing.push("想預約日期");
-  else if (!hasPreferredTime) missing.push("想預約時間");
-  return missing;
+function getAppointmentMissingDetails(message: string) {
+  return getMissingSandboxAppointmentDetails(extractSandboxAppointmentInfo(message));
 }
 
 function buildTaskStatus(taskType: SandboxManualTaskType | null, missingDetails: string[]): SandboxManualReplyTaskEvent["status"] {
   if (taskType === "appointment_availability" && missingDetails.length > 0) return "collecting_info";
   if (taskType === "quote_missing_info") return "collecting_info";
   return "pending_human_reply";
+}
+
+function buildAppointmentTaskReply(missingDetails: string[]) {
+  if (missingDetails.length === 0) return APPOINTMENT_TASK_REPLY;
+  return `${APPOINTMENT_TASK_REPLY}也請先補充：${missingDetails.join("、")}。`;
+}
+
+function buildManualTaskSuggestedReply(
+  decision: SandboxCustomerServiceTriageDecision,
+  taskType: SandboxManualTaskType,
+  missingDetails: string[],
+) {
+  if (taskType === "appointment_availability") return buildAppointmentTaskReply(missingDetails);
+  return decision.suggested_reply;
+}
+
+function buildAssistantReplyForManualTask(task: SandboxManualReplyTaskEvent, decision: SandboxCustomerServiceTriageDecision) {
+  const missingDetails = task.missing_details || [];
+  if (task.task_type === "appointment_availability" && missingDetails.length === 0) return APPOINTMENT_COMPLETE_ASSISTANT_REPLY;
+  return task.suggested_reply || decision.suggested_reply;
 }
 
 function buildManualTaskEvent(
@@ -145,11 +127,12 @@ function buildManualTaskEvent(
   const knownDetails = buildKnownDetails(message, decision);
   const missingDetails =
     decision.task_type === "appointment_availability"
-      ? getMissingAppointmentDetails(knownDetails)
+      ? getAppointmentMissingDetails(message)
       : decision.task_type === "quote_missing_info"
         ? decision.missingQuoteFields
         : [];
   const taskType = decision.task_type || "other";
+  const suggestedReply = buildManualTaskSuggestedReply(decision, taskType, missingDetails);
   const now = new Date().toISOString();
 
   return {
@@ -166,8 +149,8 @@ function buildManualTaskEvent(
     known_details: knownDetails,
     missing_details: missingDetails,
     auto_replied: decision.should_auto_reply,
-    suggested_reply: decision.suggested_reply,
-    reply_note: decision.suggested_reply || decision.classification_reason,
+    suggested_reply: suggestedReply,
+    reply_note: suggestedReply || decision.classification_reason,
     waiting_minutes: 0,
     priority: decision.priority,
     status: buildTaskStatus(taskType, missingDetails),
@@ -333,10 +316,11 @@ export default function ConversationLogsPage() {
       if (triageDecision.should_create_manual_task) {
         setQuoteClarificationCount(0);
         const task = createManualTask(message, triageDecision);
-        appendAssistantMessage(triageDecision.suggested_reply);
+        const systemReply = buildAssistantReplyForManualTask(task, triageDecision);
+        appendAssistantMessage(systemReply);
         setLastRun({
           customerMessage: message,
-          systemReply: triageDecision.suggested_reply,
+          systemReply,
           usedKnowledgeBase: false,
           transferredToHuman: true,
           manualTaskType: task.task_type || null,

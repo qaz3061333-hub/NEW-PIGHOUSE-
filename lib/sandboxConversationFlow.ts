@@ -1,4 +1,5 @@
 import type { SandboxAppointmentDraft } from "@/lib/sandboxAppointmentDraft";
+import { isSandboxAppointmentAvailabilityMessage } from "@/lib/sandboxAppointmentInfoExtraction";
 
 export type SandboxConversationFlow = "quote_flow" | "appointment_flow" | "manual_flow" | "unknown";
 
@@ -122,7 +123,7 @@ export function isSandboxQuoteFlowQuestion(message: string) {
 
 export function isSandboxAppointmentFlowRequest(message: string) {
   const normalized = normalizeText(message);
-  return includesAny(normalized, APPOINTMENT_KEYWORDS) || includesAny(normalized, RESCHEDULE_CANCEL_KEYWORDS);
+  return isSandboxAppointmentAvailabilityMessage(message) || includesAny(normalized, APPOINTMENT_KEYWORDS) || includesAny(normalized, RESCHEDULE_CANCEL_KEYWORDS);
 }
 
 export function isSandboxHighRiskServiceQuestion(message: string) {
