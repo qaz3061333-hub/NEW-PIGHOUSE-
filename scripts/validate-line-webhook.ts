@@ -9,6 +9,7 @@ import {
   type SandboxKnowledgeAnswerRunner,
 } from "../lib/sandboxLineCustomerService";
 import { SANDBOX_APPOINTMENT_AVAILABILITY_COMPLETE_REPLY } from "../lib/sandboxAppointmentAvailabilityReply";
+import { POST as lineWebhookPOST } from "../app/api/line/webhook/route";
 
 const mockKnowledgeAnswerRunner: SandboxKnowledgeAnswerRunner = async (request) => ({
   answer: String(request.message || "").includes("住宿")
@@ -34,6 +35,63 @@ function signBody(rawBody: string, channelSecret: string) {
 function assertNotIncludes(value: string, banned: string[]) {
   for (const keyword of banned) {
     assert.equal(value.includes(keyword), false, `reply must not include ${keyword}: ${value}`);
+  }
+}
+
+function buildLineWebhookRequest(events: unknown[], channelSecret: string) {
+  const rawBody = JSON.stringify({ events });
+  return new Request("http://localhost/api/line/webhook", {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "x-line-signature": signBody(rawBody, channelSecret),
+    },
+    body: rawBody,
+  });
+}
+
+async function assertWebhookReplyCounts(replyApiStatus: number, expected: { processed: number; failed_count: number }) {
+  const oldSecret = process.env.LINE_CHANNEL_SECRET;
+  const oldToken = process.env.LINE_CHANNEL_ACCESS_TOKEN;
+  const originalFetch = globalThis.fetch;
+  const channelSecret = "line-secret-for-validation";
+  let replyApiCalls = 0;
+
+  process.env.LINE_CHANNEL_SECRET = channelSecret;
+  process.env.LINE_CHANNEL_ACCESS_TOKEN = "line-access-token-for-validation";
+  globalThis.fetch = (async () => {
+    replyApiCalls += 1;
+    return new Response(replyApiStatus >= 200 && replyApiStatus < 300 ? "{}" : "mock LINE reply failure", {
+      status: replyApiStatus,
+    });
+  }) as typeof fetch;
+
+  try {
+    const response = await lineWebhookPOST(
+      buildLineWebhookRequest(
+        [
+          {
+            type: "message",
+            replyToken: "reply-token",
+            source: { type: "user", userId: "U123" },
+            message: { type: "text", text: "明天3點可以洗澡嗎？" },
+          },
+        ],
+        channelSecret,
+      ),
+    );
+    assert.equal(response.status, 200);
+    const payload = (await response.json()) as { processed: number; ignored_count: number; failed_count: number };
+    assert.equal(replyApiCalls, 1);
+    assert.equal(payload.processed, expected.processed, `processed count mismatch for status ${replyApiStatus}`);
+    assert.equal(payload.ignored_count, 0);
+    assert.equal(payload.failed_count, expected.failed_count, `failed_count mismatch for status ${replyApiStatus}`);
+  } finally {
+    if (oldSecret === undefined) delete process.env.LINE_CHANNEL_SECRET;
+    else process.env.LINE_CHANNEL_SECRET = oldSecret;
+    if (oldToken === undefined) delete process.env.LINE_CHANNEL_ACCESS_TOKEN;
+    else process.env.LINE_CHANNEL_ACCESS_TOKEN = oldToken;
+    globalThis.fetch = originalFetch;
   }
 }
 
@@ -110,6 +168,11 @@ async function main() {
   assert.equal(highRisk.manualTaskType, "high_risk");
   assert.equal(highRisk.replyText.includes("獸醫"), true);
   assertNotIncludes(highRisk.replyText, ["可以幫您清", "可以清"]);
+
+  await assertWebhookReplyCounts(200, { processed: 1, failed_count: 0 });
+  await assertWebhookReplyCounts(400, { processed: 0, failed_count: 1 });
+  await assertWebhookReplyCounts(401, { processed: 0, failed_count: 1 });
+  await assertWebhookReplyCounts(429, { processed: 0, failed_count: 1 });
 
   console.log("LINE webhook helper validation passed.");
 }

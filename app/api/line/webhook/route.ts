@@ -52,6 +52,7 @@ export async function POST(request: Request) {
   const events = Array.isArray(payload.events) ? payload.events : [];
   let processed = 0;
   let ignored = 0;
+  let failed = 0;
 
   for (const event of events) {
     const extraction = extractLineTextMessageEvent(event);
@@ -72,14 +73,24 @@ export async function POST(request: Request) {
         ...summarizeSandboxLineReplyForLog(reply),
       });
 
-      await replyLineTextMessage({
+      const replyResult = await replyLineTextMessage({
         channelAccessToken: lineEnv.channelAccessToken,
         replyToken: extraction.event.replyToken,
         text: reply.replyText,
       });
 
+      if (!replyResult.ok) {
+        failed += 1;
+        console.error("[LINE webhook] Reply failed; event was not counted as processed", {
+          userId: extraction.event.userId,
+          status: replyResult.status,
+        });
+        continue;
+      }
+
       processed += 1;
     } catch (error) {
+      failed += 1;
       console.error("[LINE webhook] Failed to process text message event", {
         userId: extraction.event.userId,
         error: (error as Error).message,
@@ -89,8 +100,9 @@ export async function POST(request: Request) {
 
   return NextResponse.json({
     ok: true,
-    ignored: processed === 0,
+    ignored: processed === 0 && failed === 0,
     processed,
     ignored_count: ignored,
+    failed_count: failed,
   });
 }
