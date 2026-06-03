@@ -12,6 +12,19 @@ NEW-PIGHOUSE- / new-pighouse-pjdh
 
 目前只做 LINE 客服後台方向；暫不做 FB、IG、POS、金流、自動排班。
 
+## 最新狀態：System Audit & V2 Blueprint v1
+
+目前 `main` 已凍結新增功能，下一步不是繼續補 LINE、預約或 dashboard，而是先完成 System Audit & V2 Blueprint v1。
+
+PR #85 後，LINE live test 已驗證「能收發」，但也暴露出：
+
+- 缺正式對話記憶與 conversation 保存。
+- live LINE 轉人工尚未完整落地到人工回覆工作台。
+- sandbox code 與 live code 邊界需重整。
+- 多店架構尚未設計。
+
+在審計完成前，不建議繼續新增 LINE 對話記憶、正式人工送 LINE、多店設定頁或 schema 擴充。現階段應先盤點現有系統、確認哪些概念保留、哪些 sandbox / legacy code 不適合正式化，再決定 V2 是清理現有系統或新開乾淨 branch / repo。
+
 ## Customer Service Triage MVP v1 方向更新
 
 主線已收斂為「寵物店 LINE 客服分流系統」，不是複雜線上預約系統。Conversation Logs sandbox 的核心應先處理重複問題自動查 active Knowledge Base 回覆，並把預約、問空檔、改約、取消、客訴、退款、異常、高風險、AI 不確定、KB 找不到等情境建立 Manual Reply Task，避免自動回覆後被視為已讀而漏處理。
